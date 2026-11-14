@@ -204,6 +204,14 @@ jobs:
       with:
         tool: cargo-nextest
 
+    # The browser test of a built editions site renders real books, so
+    # mdbook's own markup is what the toolbar asset is checked against.
+    # Prebuilt and pinned; a new mdbook is a deliberate bump here.
+    - name: Install mdbook
+      uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+      with:
+        tool: mdbook@0.5.4
+
     # No Node.js step and no Playwright version: the example asks the crate
     # for the build its driver expects (its doc comment says why nothing in
     # this repo names one). Keyed on the lockfile so a `playwright-rs` bump
@@ -269,7 +277,9 @@ jobs:
         BROWSER: all
 
     - name: Run tests (with dev feature)
-      run: cargo nextest run --workspace --features panschema/dev -E 'package(panschema)'
+      # The built editions site is the same with the dev feature, and
+      # building it twice per runner buys nothing.
+      run: cargo nextest run --workspace --features panschema/dev -E 'package(panschema) and not test(e2e_a_built_editions_site)'
       env:
         BROWSER: all
 

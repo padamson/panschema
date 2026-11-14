@@ -440,14 +440,10 @@ real repository's content.
   commands built `/`, `book/v0.1/` (from `v0.1.1`), `book/main/`, and
   three schema versions, with the tag's toolchain supplied by an
   override and the tools from a prepared cache.
-- The browser check is the ignored e2e test
-  `a_built_editions_site_links_agree_both_ways_in_a_browser`, which reads
-  a site from `target/editions-site` and checks the switcher's entries
-  and that choosing one navigates, the banner on the unreleased edition
-  and its absence on the current one and the root copy, the schema
-  button's target per edition, and each schema version's brand link,
-  `current/` included. Run it with `--run-ignored only` against any
-  built site.
+- The browser check was an ignored e2e test that read a site built by
+  hand. [Feature 54](54-book-editions-as-declared-spans.md) replaced it
+  with `e2e_a_built_editions_site_links_agree_both_ways`, which builds its
+  own site with the real `mdbook` and runs with the other browser tests.
 - Dogfooding is not this slice: it is using the released panschema in
   cqa-schema, the ontology-authoring-template scaffold and the other
   schema repos, by hand, in their own manifests, install scripts and

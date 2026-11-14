@@ -21,7 +21,7 @@ mod mdbook;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::generate_site;
+use common::{generate_site, git, without_git_env};
 
 use std::fs;
 use std::future::Future;

@@ -9,7 +9,7 @@ mod rust_writer;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::generate_site;
+use common::{generate_site, git};
 
 use std::fs;
 use std::path::Path;
@@ -7121,18 +7121,6 @@ output_dir = "site"
             && stderr.contains("full.yaml"),
         "publish reports the overlap, naming both declared datasets; got: {stderr}"
     );
-}
-
-/// Run a git command in `cwd`, asserting success. git is a standing
-/// requirement of this repo, so a host without it fails here.
-fn git(cwd: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .status()
-        .expect("git on PATH");
-    assert!(status.success(), "git {args:?} failed");
 }
 
 /// Lay one extracted `contract` package version into a local cache

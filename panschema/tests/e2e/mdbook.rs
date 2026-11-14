@@ -6,14 +6,16 @@
 //! render a menu that opens and lists them, or that the menu closes again.
 //! That is what these cover.
 //!
-//! No mdbook and no server: the page is a minimal stand-in for mdbook's
-//! toolbar loaded over `file://`, which is enough because the asset does no
-//! fetching and imports nothing. The one exception is ignored: a check of
-//! a site built from a real schema repository's content. Setup is the
-//! parent target's: install Playwright browsers matching
+//! Most use no mdbook and no server: the page is a minimal stand-in for
+//! mdbook's toolbar loaded over `file://`, which is enough because the
+//! asset does no fetching and imports nothing. One builds a whole site
+//! from a scratch repository with the real `mdbook` and `panschema
+//! publish`, so it needs `mdbook` on `PATH`. Setup is otherwise the parent
+//! target's: install Playwright browsers matching
 //! [`playwright_rs::PLAYWRIGHT_VERSION`].
 
 use std::path::Path;
+use std::process::Command;
 
 use panschema::mdbook::{EditionOption, EditionsContext, ToolbarLink, install, install_toolbar};
 use panschema::publish::{BookLinkConfig, BookLinkEntry};
@@ -725,148 +727,293 @@ fn e2e_a_page_without_a_canonical_keeps_a_plain_link_and_no_switcher() {
     });
 }
 
-/// A site that `mdbook-panschema editions` and `panschema publish` built
-/// from a real schema repository with a released line (`v0.1`, from
-/// `v0.1.1`) and a `main` that has moved on, read in a browser: the
-/// switcher, the banners and the schema links on the book side, and the
-/// brand links on the schema side, agree about which edition describes
-/// which version. The site is not checked in: build it from such a
-/// repository with both commands and copy its site root to
-/// `target/editions-site`.
-#[test]
-#[ignore = "needs a site built from a real schema repo at target/editions-site; run with --run-ignored only -E 'test(a_built_editions_site)'"]
-fn a_built_editions_site_links_agree_both_ways_in_a_browser() {
-    let site = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/editions-site");
+/// Run one of this package's binaries in `repo` with the cache kept in
+/// `cache`, asserting success.
+fn run_bin(bin: &str, repo: &Path, cache: &Path, args: &[&str]) {
+    let out = super::without_git_env(bin)
+        .args(args)
+        .current_dir(repo)
+        .env("PANSCHEMA_CACHE_ROOT", cache)
+        .output()
+        .expect("run the binary");
     assert!(
-        site.join("book/v0.1/index.html").is_file(),
-        "no built editions site at {}",
-        site.display()
+        out.status.success(),
+        "{bin} {args:?} failed; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    let site = site.canonicalize().expect("site path");
+}
+
+/// A schema repository with two editions, three releases, and an edge:
+/// `First edition` from `v0.1.0` (holding `v0.1.0` and `v0.1.1`) and
+/// `Second edition` from `v0.2.0` (holding `v0.2.0` and `main`), each
+/// book saying which it is. Its site, built by `panschema publish` and
+/// `mdbook-panschema editions` with the `mdbook` on `PATH`, is under
+/// `site/`.
+fn built_editions_site() -> tempfile::TempDir {
+    let version = Command::new("mdbook")
+        .arg("--version")
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned());
+    assert!(
+        version
+            .as_ref()
+            .is_ok_and(|v| v.starts_with("mdbook v0.5.")),
+        "this test builds real books: put mdbook 0.5 on PATH; found {version:?}"
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let cache = dir.path().join("cache");
+    std::fs::create_dir_all(&repo).expect("repo dir");
+    super::git(&repo, &["init", "--initial-branch=main", "--quiet"]);
+    super::git(&repo, &["config", "user.email", "test@example.com"]);
+    super::git(&repo, &["config", "user.name", "Test"]);
+    super::git(&repo, &["config", "commit.gpgsign", "false"]);
+    super::git(&repo, &["config", "tag.gpgSign", "false"]);
+
+    let write = |rel: &str, body: &str| {
+        let path = repo.join(rel);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+        std::fs::write(path, body).expect("write");
+    };
+    write(".gitignore", "site/\n");
+    write(
+        "panschema-publish.toml",
+        r#"[schema]
+name = "editions_site"
+version = "0.2.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+edge = "main"
+output_dir = "site/schema"
+
+[[book_link]]
+schema_path = "schema/current/"
+label = "Schema"
+
+[editions]
+output_dir = "site"
+
+[[editions.edition]]
+id = "1"
+name = "First edition"
+book = "books/1"
+from = "v0.1.0"
+
+[[editions.edition]]
+id = "2"
+name = "Second edition"
+book = "books/2"
+from = "v0.2.0"
+"#,
+    );
+    for (id, word) in [("1", "one"), ("2", "two")] {
+        write(
+            &format!("books/{id}/book.toml"),
+            &format!("[book]\ntitle = \"Edition {word}\"\n"),
+        );
+        write(
+            &format!("books/{id}/src/SUMMARY.md"),
+            "# Summary\n\n- [Chapter](chapter.md)\n",
+        );
+        write(
+            &format!("books/{id}/src/chapter.md"),
+            &format!("# Chapter\n\nThe book of edition {word}.\n"),
+        );
+    }
+    for tag in ["v0.1.0", "v0.1.1", "v0.2.0", ""] {
+        write(
+            "schema.yaml",
+            &format!(
+                "id: https://example.org/editions_site\nname: editions_site\n\
+                 version: {tag}\ndefault_range: string\n\
+                 classes:\n  Thing:\n    description: A thing as of {tag}.\n"
+            ),
+        );
+        super::git(&repo, &["add", "."]);
+        super::git(&repo, &["commit", "--quiet", "-m", "next"]);
+        if !tag.is_empty() {
+            super::git(&repo, &["tag", tag]);
+        }
+    }
+
+    run_bin(env!("CARGO_BIN_EXE_panschema"), &repo, &cache, &["publish"]);
+    run_bin(
+        env!("CARGO_BIN_EXE_mdbook-panschema"),
+        &repo,
+        &cache,
+        &["editions"],
+    );
+    dir
+}
+
+/// A site built from a scratch repository by `panschema publish` and
+/// `mdbook-panschema editions` with the real `mdbook`, read in a
+/// browser: each edition is its own book, the switcher, the banner and
+/// the version list agree about which edition holds which release, and
+/// every version the list offers opens schema docs whose brand leads
+/// back to the edition holding that version.
+#[test]
+fn e2e_a_built_editions_site_links_agree_both_ways() {
+    let dir = built_editions_site();
+    let site = dir.path().join("repo").join("site");
     let url = |rel: &str| format!("file://{}/{rel}", site.display());
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
+        let text = |page: playwright_rs::Page| async move {
+            page.evaluate_value("document.body.innerText")
+                .await
+                .expect("text")
+        };
+        let opens = |page: playwright_rs::Page, words: &'static str| async move {
+            let body = text(page).await;
+            assert!(
+                body.contains(&format!("The book of edition {words}.")),
+                "expected edition {words}'s book; got:\n{body:.300}"
+            );
+        };
 
-        // The released edition at its stable path is the current one.
+        // The first edition, which is not current.
         let page = browser.new_page().await.expect("page");
-        page.goto(&url("book/v0.1/index.html"), None)
+        page.goto(&url("book/1/chapter.html"), None)
             .await
             .expect("goto");
+        opens(page.clone(), "one").await;
         let options = page
             .evaluate_value(
                 "Array.from(document.querySelectorAll('select.edition-switcher option'))\
                  .map(o => o.value + '|' + o.textContent + '|' + o.selected).join(',')",
             )
             .await
-            .expect("read options");
-        assert_eq!(options, "v0.1|v0.1|true,main|main (unreleased)|false");
-        assert_eq!(
-            page.locator(".edition-banner")
-                .count()
-                .await
-                .expect("count"),
-            0,
-            "the current edition carries no banner"
-        );
-        let href = page
-            .evaluate_value("document.querySelector('a.schema-docs-button').href")
-            .await
-            .expect("href");
-        assert!(
-            href.ends_with("/editions-site/schema/v0.1.1/"),
-            "the schema button targets the release the edition was built from; got {href}"
-        );
-        page.locator("select.edition-switcher")
-            .select_option("main", None)
-            .await
-            .expect("select");
-        page.wait_for_url("**/editions-site/book/main/", None)
-            .await
-            .expect("choosing main opens the unreleased edition");
-
-        // The unreleased edition carries main's revision and says so.
-        let page = browser.new_page().await.expect("page");
-        page.goto(&url("book/main/introduction.html"), None)
-            .await
-            .expect("goto");
-        let text = page
-            .evaluate_value("document.body.innerText")
-            .await
-            .expect("text");
-        assert!(
-            text.contains("not released yet"),
-            "main's own introduction should render; got {text:.200}"
-        );
+            .expect("options");
+        assert_eq!(options, "2|Second edition|false,1|First edition|true");
         let banner = page
             .locator(".edition-banner")
             .text_content()
             .await
             .expect("banner")
             .unwrap_or_default();
-        assert!(banner.contains("unreleased"), "got: {banner}");
-        let banner_href = page
-            .evaluate_value("document.querySelector('.edition-banner a').href")
-            .await
-            .expect("banner href");
+        let (first, newest) = (banner.find("v0.1.0"), banner.find("v0.1.1"));
         assert!(
-            banner_href.ends_with("/editions-site/book/v0.1/"),
-            "the banner points at the current edition; got {banner_href}"
+            banner.contains("First edition")
+                && first.is_some()
+                && newest.is_some()
+                && first < newest,
+            "the banner names the edition and the first and newest release it covers; \
+             got: {banner}"
         );
-        let href = page
-            .evaluate_value("document.querySelector('a.schema-docs-button').href")
+        let current = page
+            .evaluate_value(
+                "(a => a.textContent + '|' + a.href)(document.querySelector('.edition-banner a'))",
+            )
             .await
-            .expect("href");
+            .expect("banner link");
         assert!(
-            href.ends_with("/editions-site/schema/main/"),
-            "the unreleased edition links to the edge schema; got {href}"
+            current.starts_with("Second edition|") && current.ends_with("/book/2/"),
+            "got: {current}"
         );
 
-        // The root copy is the current edition, with its links intact.
-        let page = browser.new_page().await.expect("page");
-        page.goto(&url("index.html"), None).await.expect("goto");
+        page.locator(".schema-docs-menu .icon-button")
+            .click(None)
+            .await
+            .expect("open the version list");
         assert_eq!(
-            page.locator(".edition-banner")
-                .count()
-                .await
-                .expect("count"),
-            0
+            page.evaluate_value(VERSION_GROUPS).await.expect("groups"),
+            "Second edition:main v0.2.0|+First edition:v0.1.1* v0.1.0"
         );
-        let selected = page
-            .evaluate_value("document.querySelector('select.edition-switcher').value")
+        let targets = page
+            .evaluate_value(
+                "Array.from(document.querySelectorAll('.schema-docs-edition a'))\
+                 .map(a => a.textContent + '|' + a.href).join(',')",
+            )
             .await
-            .expect("selected");
-        assert_eq!(selected, "v0.1");
-        let href = page
-            .evaluate_value("document.querySelector('a.schema-docs-button').href")
-            .await
-            .expect("href");
-        assert!(
-            href.ends_with("/editions-site/schema/v0.1.1/"),
-            "got {href}"
-        );
+            .expect("targets");
 
-        // The schema pages link back to the edition that describes them.
-        for (version, edition) in [
-            ("v0.1.0", "v0.1"),
-            ("v0.1.1", "v0.1"),
-            ("current", "v0.1"),
-            ("main", "main"),
-        ] {
-            let page = browser.new_page().await.expect("page");
-            page.goto(&url(&format!("schema/{version}/index.html")), None)
+        // Each version the list offers leads to its own schema docs, whose
+        // brand leads back to the edition holding it.
+        for target in targets.split(',') {
+            let (version, href) = target.split_once('|').expect("version|href");
+            assert!(
+                href.ends_with(&format!("/repo/site/schema/{version}/")),
+                "{version} links its own schema docs; got {href}"
+            );
+            let edition = if version.starts_with("v0.1.") {
+                "1"
+            } else {
+                "2"
+            };
+            let docs = browser.new_page().await.expect("page");
+            docs.goto(&format!("{href}index.html"), None)
                 .await
                 .expect("goto");
-            let href = page
+            let brand = docs
                 .evaluate_value("document.querySelector('a.site-title').href")
                 .await
-                .expect("brand href");
+                .expect("brand");
             assert!(
-                href.ends_with(&format!("/editions-site/book/{edition}/")),
-                "schema/{version}/ brands the {edition} edition; got {href}"
+                brand.ends_with(&format!("/book/{edition}/")),
+                "{version}'s schema docs brand book/{edition}/; got {brand}"
             );
         }
+
+        // The second edition at its own path, and its copy at the site
+        // root: the current edition, so neither carries a banner.
+        for rel in ["book/2/chapter.html", "chapter.html"] {
+            let page = browser.new_page().await.expect("page");
+            page.goto(&url(rel), None).await.expect("goto");
+            opens(page.clone(), "two").await;
+            assert_eq!(
+                page.locator(".edition-banner")
+                    .count()
+                    .await
+                    .expect("count"),
+                0,
+                "{rel}: the current edition carries no banner"
+            );
+            page.locator(".schema-docs-menu .icon-button")
+                .click(None)
+                .await
+                .expect("open the version list");
+            assert_eq!(
+                page.evaluate_value(VERSION_GROUPS).await.expect("groups"),
+                "+Second edition:main v0.2.0*|First edition:v0.1.1 v0.1.0",
+                "{rel}"
+            );
+        }
+
+        // Choosing the first edition opens its book. Over `file://` the
+        // directory has no index page of its own, so its index is read.
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url("chapter.html"), None).await.expect("goto");
+        page.locator("select.edition-switcher")
+            .select_option("1", None)
+            .await
+            .expect("select");
+        page.wait_for_url("**/book/1/", None)
+            .await
+            .expect("choosing the first edition goes to its root");
+        let index = format!("{}index.html", page.url());
+        page.goto(&index, None).await.expect("goto");
+        opens(page.clone(), "one").await;
+
+        let docs = browser.new_page().await.expect("page");
+        docs.goto(&url("schema/current/index.html"), None)
+            .await
+            .expect("goto");
+        let brand = docs
+            .evaluate_value("document.querySelector('a.site-title').href")
+            .await
+            .expect("brand");
+        assert!(
+            brand.ends_with("/book/2/"),
+            "the current schema docs brand the current edition; got {brand}"
+        );
     });
 }
 

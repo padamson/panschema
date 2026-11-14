@@ -231,18 +231,19 @@ new listings go into without parsing the publish spec.
 
 ### Slice 4: Integration tests and docs
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A schema repo with two declared editions publishes both,
 verified end to end in a browser, and the README tells an author how to
 start a new edition.
 
 **Acceptance Criteria:**
-- [ ] A repo with two editions, three releases, and an edge publishes
+- [x] A repo with two editions, three releases, and an edge publishes
   `/`, `book/1/`, `book/2/`, and the schema docs, with the switcher, the
   banners, the version list, and each schema version's brand correct in a
-  browser.
-- [ ] README covers what slices 2 and 3 add: the edition names and the
+  browser. The test builds the repo and its site itself, with the real
+  `mdbook`, and runs with the rest of the browser tests on every platform.
+- [x] README covers what slices 2 and 3 add: the edition names and the
   version list in the toolbar, and the authoring edition with
   `mdbook-panschema editions --authoring`.
 
@@ -255,7 +256,7 @@ start a new edition.
 | Slice 1: Declared editions | Must Have | None | Completed |
 | Slice 2: Toolbar | Must Have | Slice 1 | Completed |
 | Slice 3: Authoring edition | Should Have | Slice 1 | Completed |
-| Slice 4: Integration and docs | Must Have | Slices 1, 2 | Not Started |
+| Slice 4: Integration and docs | Must Have | Slices 1, 2 | Completed |
 
 ---
 
@@ -285,8 +286,8 @@ start a new edition.
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met; all slices "Completed".
-- [ ] All tests passing: `cargo nextest run`.
-- [ ] Docs build cleanly: `cargo doc`.
-- [ ] Formatted: `cargo fmt --check`; no clippy warnings.
-- [ ] README.md and CHANGELOG.md updated.
+- [x] All acceptance criteria met; all slices "Completed".
+- [x] All tests passing: `cargo nextest run`.
+- [x] Docs build cleanly: `cargo doc`.
+- [x] Formatted: `cargo fmt --check`; no clippy warnings.
+- [x] README.md and CHANGELOG.md updated.

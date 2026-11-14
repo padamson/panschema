@@ -543,6 +543,7 @@ Read our [WHY.md](WHY.md) to understand the full vision.
 - Rust 1.88+ (edition 2024)
 - `cargo-nextest` (recommended for testing)
 - Playwright browsers (for E2E tests)
+- `mdbook` 0.5 on `PATH` (for the E2E test that builds a book in editions; CI pins 0.5.4)
 
 ```bash
 cargo run --example install-browsers                 # the build the crate's driver expects
