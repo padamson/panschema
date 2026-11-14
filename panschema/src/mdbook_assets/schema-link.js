@@ -8,15 +8,21 @@
 //
 // When the book is published in editions, the same asset renders the
 // edition switcher beside it and a banner on every page that is not the
-// current edition. The editions build bakes that context in; a plain
-// `mdbook-panschema install` bakes none, and the switcher stays away.
+// current edition, and the button of a schema whose docs are published
+// per version lists every version, grouped by edition. The editions
+// build bakes that context in; a plain `mdbook-panschema install` bakes
+// none, and the switcher stays away.
 (function () {
   "use strict";
 
-  // Substituted at install time with a JSON array of {schemaPath, label}.
+  // Substituted at install time with a JSON array of {schemaPath, label},
+  // each with a versionsRoot under editions when its docs are published
+  // per version.
   var links = __PANSCHEMA_LINKS__;
-  // Substituted at install time with null, or with
-  // {editions: [{label, unreleased}], current, own}.
+  // Substituted at install time with null, or with {editions, current,
+  // own}: `current` and `own` are edition ids, and each edition is
+  // {id, name, releases, versions}, where `releases` is null or
+  // [first, newest] and `versions` runs newest first.
   var editions = __PANSCHEMA_EDITIONS__;
 
   // mdbook renders a per-page `path_to_root` so links resolve at any
@@ -74,8 +80,110 @@
     );
   }
 
+  // A toolbar button opening a list: a real <button> and real links, so
+  // it is reachable by keyboard, which a hover-only menu would not be.
+  function menu(title) {
+    var wrap = document.createElement("div");
+    wrap.className = "schema-docs-button schema-docs-menu";
+
+    var toggle = document.createElement("button");
+    toggle.className = "icon-button";
+    toggle.type = "button";
+    toggle.title = title;
+    toggle.setAttribute("aria-label", title);
+    toggle.setAttribute("aria-haspopup", "true");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.innerHTML = glyph();
+
+    var list = document.createElement("ul");
+    list.className = "schema-docs-menu-list";
+    list.hidden = true;
+
+    function setOpen(open) {
+      list.hidden = !open;
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    toggle.addEventListener("click", function (e) {
+      e.stopPropagation();
+      setOpen(list.hidden);
+    });
+    document.addEventListener("click", function () {
+      setOpen(false);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") {
+        return;
+      }
+      // A reader inside the list would be left on a hidden link.
+      if (list.contains(document.activeElement)) {
+        toggle.focus();
+      }
+      setOpen(false);
+    });
+
+    wrap.appendChild(toggle);
+    wrap.appendChild(list);
+    return { wrap: wrap, list: list };
+  }
+
+  function linkItem(text, href) {
+    var item = document.createElement("li");
+    var a = document.createElement("a");
+    a.href = href;
+    a.textContent = text;
+    item.appendChild(a);
+    return item;
+  }
+
+  // A list item holding a label and the list it names.
+  function labelledGroup(className, label) {
+    var item = document.createElement("li");
+    item.className = className;
+    var name = document.createElement("span");
+    name.className = "schema-docs-group-label";
+    name.textContent = label;
+    item.appendChild(name);
+    var list = document.createElement("ul");
+    list.setAttribute("role", "group");
+    list.setAttribute("aria-label", label);
+    item.appendChild(list);
+    return { item: item, list: list };
+  }
+
+  // Every version of one schema's docs, a group per edition in the
+  // baked order. The page's own edition is marked, and so is the
+  // version its book describes, which is the one the entry itself links
+  // to; the stylesheet mutes the rest.
+  function versionGroups(list, entry) {
+    editions.editions.forEach(function (edition) {
+      var own = edition.id === editions.own;
+      var group = labelledGroup(
+        own ? "schema-docs-edition own" : "schema-docs-edition",
+        edition.name
+      );
+      edition.versions.forEach(function (version) {
+        var item = linkItem(
+          version,
+          base + entry.versionsRoot + encodeURIComponent(version) + "/"
+        );
+        if (entry.versionsRoot + version + "/" === entry.schemaPath) {
+          item.firstChild.setAttribute("aria-current", "true");
+        }
+        group.list.appendChild(item);
+      });
+      list.appendChild(group.item);
+    });
+  }
+
   function schemaLink(links) {
-    if (links.length === 1) {
+    // Without a site root there is nowhere to resolve a version against,
+    // and each link still reaches the version its edition describes.
+    function versioned(entry) {
+      return site !== null && typeof entry.versionsRoot === "string";
+    }
+
+    if (links.length === 1 && !versioned(links[0])) {
       // Exactly what a single-schema book has always rendered.
       var link = document.createElement("a");
       link.className = "icon-button schema-docs-button";
@@ -87,60 +195,35 @@
       return;
     }
 
-    // Several schemas: one control in the same slot, opening a menu. Built
-    // as a real <button> + list so it is reachable by keyboard, which a
-    // hover-only menu would not be.
-    var wrap = document.createElement("div");
-    wrap.className = "schema-docs-button schema-docs-menu";
-
-    var toggle = document.createElement("button");
-    toggle.className = "icon-button";
-    toggle.type = "button";
-    toggle.title = "Schema reference";
-    toggle.setAttribute("aria-label", "Schema reference");
-    toggle.setAttribute("aria-haspopup", "true");
-    toggle.setAttribute("aria-expanded", "false");
-    toggle.innerHTML = glyph();
-
-    var menu = document.createElement("ul");
-    menu.className = "schema-docs-menu-list";
-    menu.hidden = true;
-
+    // Several schemas, or one with a version to choose: one control in
+    // the same slot, opening a list.
+    var several = links.length > 1;
+    var control = menu(several ? "Schema reference" : links[0].label);
     links.forEach(function (entry) {
-      var item = document.createElement("li");
-      var a = document.createElement("a");
-      a.href = base + entry.schemaPath;
-      a.textContent = entry.label;
-      item.appendChild(a);
-      menu.appendChild(item);
-    });
-
-    function setOpen(open) {
-      menu.hidden = !open;
-      toggle.setAttribute("aria-expanded", open ? "true" : "false");
-    }
-
-    toggle.addEventListener("click", function (e) {
-      e.stopPropagation();
-      setOpen(menu.hidden);
-    });
-    document.addEventListener("click", function () {
-      setOpen(false);
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") {
-        setOpen(false);
+      if (!versioned(entry)) {
+        control.list.appendChild(linkItem(entry.label, base + entry.schemaPath));
+        return;
       }
+      if (!several) {
+        versionGroups(control.list, entry);
+        return;
+      }
+      // Its versions sit under its label, apart from the next entry.
+      var schema = labelledGroup("schema-docs-schema", entry.label);
+      versionGroups(schema.list, entry);
+      control.list.appendChild(schema.item);
     });
-
-    wrap.appendChild(toggle);
-    wrap.appendChild(menu);
-    leftButtons.appendChild(wrap);
+    leftButtons.appendChild(control.wrap);
   }
 
   function editionSwitcher(editions, site) {
-    function editionRoot(label) {
-      return site + "book/" + encodeURIComponent(label) + "/";
+    function editionRoot(id) {
+      return site + "book/" + encodeURIComponent(id) + "/";
+    }
+    function editionById(id) {
+      return editions.editions.filter(function (edition) {
+        return edition.id === id;
+      })[0];
     }
 
     if (leftButtons && !leftButtons.querySelector(".edition-switcher")) {
@@ -150,11 +233,9 @@
       select.setAttribute("aria-label", "Book edition");
       editions.editions.forEach(function (edition) {
         var option = document.createElement("option");
-        option.value = edition.label;
-        option.textContent = edition.unreleased
-          ? edition.label + " (unreleased)"
-          : edition.label;
-        option.selected = edition.label === editions.own;
+        option.value = edition.id;
+        option.textContent = edition.releases ? edition.name : edition.name + " (unreleased)";
+        option.selected = edition.id === editions.own;
         select.appendChild(option);
       });
       // Chapters need not exist under the same path in every edition, so
@@ -168,22 +249,26 @@
     if (editions.own === editions.current || document.querySelector(".edition-banner")) {
       return;
     }
-    var unreleased = editions.editions.some(function (edition) {
-      return edition.label === editions.own && edition.unreleased;
-    });
+    var own = editionById(editions.own);
+    var current = editionById(editions.current);
+    var covers = "is unreleased";
+    if (own.releases) {
+      covers =
+        own.releases[0] === own.releases[1]
+          ? "covers " + own.releases[0]
+          : "covers " + own.releases[0] + " to " + own.releases[1];
+    }
     var banner = document.createElement("div");
     banner.className = "edition-banner";
     banner.setAttribute("role", "note");
     banner.appendChild(
       document.createTextNode(
-        unreleased
-          ? "This is the unreleased edition of the book. The current edition is "
-          : "This is the " + editions.own + " edition of the book. The current edition is "
+        "This edition, " + own.name + ", " + covers + ". The current edition is "
       )
     );
     var link = document.createElement("a");
-    link.href = editionRoot(editions.current);
-    link.textContent = editions.current;
+    link.href = editionRoot(current.id);
+    link.textContent = current.name;
     banner.appendChild(link);
     banner.appendChild(document.createTextNode("."));
     var content =

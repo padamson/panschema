@@ -6,9 +6,10 @@
   fill: none;
 }
 
-/* Multi-schema form only. The wrapper is the positioning context for the
-   menu; it must not add layout of its own, because mdbook's `.icon-button`
-   already sizes and centers the control in the toolbar. */
+/* The list form only: several schemas, or one whose versions the button
+   lists. The wrapper is the positioning context for the menu; it must not
+   add layout of its own, because mdbook's `.icon-button` already sizes
+   and centers the control in the toolbar. */
 .schema-docs-menu {
   position: relative;
   display: inline-block;
@@ -23,6 +24,10 @@
   padding: 0.25rem 0;
   list-style: none;
   min-width: 12rem;
+  /* The menu bar is sticky, so a list taller than the page below it
+     scrolls on its own. */
+  max-height: calc(100vh - var(--menu-bar-height, 50px) - 1rem);
+  overflow-y: auto;
   /* mdbook theme variables, so the menu follows the reader's theme
      instead of pinning one palette. */
   background: var(--bg);
@@ -49,14 +54,60 @@
   background: var(--theme-hover, rgba(0, 0, 0, 0.08));
 }
 
+/* Editions only: a schema's versions, a group per edition. The page's
+   own edition and the version its book describes stand out; the other
+   editions' versions are muted. */
+.schema-docs-menu-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.schema-docs-group-label {
+  display: block;
+  padding: 0.35rem 0.75rem 0.1rem;
+  white-space: nowrap;
+  font-size: 0.85em;
+}
+
+.schema-docs-schema > .schema-docs-group-label,
+.schema-docs-edition.own > .schema-docs-group-label {
+  font-weight: bold;
+}
+
+/* Several schemas: a rule between one schema's versions and its
+   neighbors. */
+.schema-docs-schema + li,
+li + .schema-docs-schema {
+  border-top: 1px solid var(--theme-popup-border, var(--sidebar-non-existant, #ccc));
+}
+
+.schema-docs-edition a {
+  padding-left: 1.5rem;
+  opacity: 0.65;
+}
+
+.schema-docs-edition.own a,
+.schema-docs-edition a:hover,
+.schema-docs-edition a:focus {
+  opacity: 1;
+}
+
+.schema-docs-edition a[aria-current="true"] {
+  font-weight: bold;
+}
+
 /* Editions only: the switcher sits in the toolbar beside the schema
    button, drawn in the reader's theme. */
 .edition-switcher {
+  /* The toolbar is a flex row as tall as the menu bar, and mdbook sets
+     the root font size to 10px: keep the control its own height and its
+     text legible. */
+  align-self: center;
   margin-left: 0.5rem;
-  padding: 0.1rem 0.3rem;
+  padding: 0.2rem 0.4rem;
   font: inherit;
-  font-size: 0.9rem;
-  vertical-align: middle;
+  font-size: 1.4rem;
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--theme-popup-border, var(--sidebar-non-existant, #ccc));

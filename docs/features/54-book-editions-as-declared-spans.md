@@ -182,25 +182,30 @@ to the edition that covers them.
 
 ### Slice 2: The toolbar names editions and lists every version
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A reader sees which edition and which versions they are
 reading about, and reaches any version's schema docs from any edition.
 
 **Acceptance Criteria:**
-- [ ] The switcher lists the editions newest first by `name`, the page's
+- [x] The switcher lists the editions newest first by `name`, the page's
   own selected and the unreleased one marked as such.
-- [ ] A page of an edition that is not current names its edition and the
-  span of releases it covers, and links to the current edition; a page of
-  the unreleased edition says it is unreleased.
-- [ ] Under editions, the schema button of a `[book_link]` entry aliasing
+- [x] A page of an edition that is not current names its edition and the
+  span of releases it covers (one release named alone), and links to the
+  current edition by name; a page of the unreleased edition says it is
+  unreleased.
+- [x] Under editions, the schema button of a `[book_link]` entry aliasing
   `current/` opens a list of every version, the edge included, grouped by
-  edition newest first; the page's own edition and its newest version are
+  edition newest first; the page's own edition and the version its book
+  describes (its newest release, or the edge while it has none) are
   emphasized and the other editions' versions de-emphasized; each links to
   that version's schema docs.
-- [ ] The list is reachable and closable by keyboard, as the multi-schema
+- [x] A book fronting several schemas keeps one control: each entry
+  aliasing `current/` lists its versions under its label, and an entry
+  naming a fixed path stays one link.
+- [x] The list is reachable and closable by keyboard, as the multi-schema
   menu is.
-- [ ] Without editions, the schema button renders as it does today.
+- [x] Without editions, the schema button renders as it does today.
 
 ---
 
@@ -243,7 +248,7 @@ start a new edition.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: Declared editions | Must Have | None | Completed |
-| Slice 2: Toolbar | Must Have | Slice 1 | Not Started |
+| Slice 2: Toolbar | Must Have | Slice 1 | Completed |
 | Slice 3: Authoring edition | Should Have | Slice 1 | Not Started |
 | Slice 4: Integration and docs | Must Have | Slices 1, 2 | Not Started |
 
@@ -264,6 +269,12 @@ start a new edition.
   mdbook-listings' manifest, and every release's `version:` bump would
   force a re-freeze, so it stays out of this feature.
 - **Switching editions lands on the first page**, as in feature 52.
+- **A second schema's version list assumes every version.** The list
+  under a `[[book_link]]` entry aliasing `current/` offers every version
+  in `[publishing]` under that entry's directory. A schema whose docs
+  started at a later release (a dependency page added at `v0.3.0`, say)
+  gets links to versions that were never published. The editions build
+  does not read the schema docs, so it cannot tell which exist.
 
 ---
 

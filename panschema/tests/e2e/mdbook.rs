@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use panschema::mdbook::{EditionOption, EditionsContext, install, install_toolbar};
+use panschema::mdbook::{EditionOption, EditionsContext, ToolbarLink, install, install_toolbar};
 use panschema::publish::{BookLinkConfig, BookLinkEntry};
 use playwright_rs::Playwright;
 
@@ -209,6 +209,54 @@ fn e2e_menu_dismisses_both_ways_and_toggle_reports_expanded_state() {
     });
 }
 
+/// One edition as the build bakes it for the fixture site: `3` covers no
+/// release and holds only the edge, `2` covers `v0.3.0` and `v0.3.1` and
+/// holds a pre-release newer than both, and `1` covers `v0.1.0` to
+/// `v0.2.0` with a pre-release between. Any other id is an edition of one
+/// release, named by its id.
+fn baked_edition(id: &str) -> EditionOption {
+    let (name, releases, versions): (&str, Option<(&str, &str)>, &[&str]) = match id {
+        "3" => ("Third edition", None, &["main"]),
+        "2" => (
+            "Second edition",
+            Some(("v0.3.0", "v0.3.1")),
+            &["v0.3.2-rc.1", "v0.3.1", "v0.3.0"],
+        ),
+        "1" => (
+            "First edition",
+            Some(("v0.1.0", "v0.2.0")),
+            &["v0.2.0", "v0.2.0-rc.1", "v0.1.0"],
+        ),
+        other => (other, Some(("v0.2.5", "v0.2.5")), &["v0.2.5"]),
+    };
+    EditionOption {
+        id: id.to_string(),
+        name: name.to_string(),
+        releases: releases.map(|(first, newest)| (first.to_string(), newest.to_string())),
+        versions: versions.iter().map(|v| v.to_string()).collect(),
+    }
+}
+
+/// A link as the editions build bakes it: `versions_root` is set for an
+/// entry that aliased `current/`.
+fn link(schema_path: &str, label: &str, versions_root: Option<&str>) -> ToolbarLink {
+    ToolbarLink {
+        schema_path: schema_path.to_string(),
+        label: label.to_string(),
+        versions_root: versions_root.map(str::to_string),
+    }
+}
+
+/// The link the build bakes on a page of edition `own` for an entry that
+/// aliased `current/` under `root`: it targets the version the edition's
+/// book describes, its newest release or the edge while it has none.
+fn alias(own: &str, label: &str, root: &str) -> ToolbarLink {
+    let described = baked_edition(own)
+        .releases
+        .map_or("main".to_string(), |(_, newest)| newest);
+    link(&format!("{root}{described}/"), label, Some(root))
+}
+
 /// A site with the asset installed for an edition `own` of a book whose
 /// editions are `3` (unreleased), `2` (current) and `1`, newest first as
 /// the build bakes them, at its stable path `book/<own>/`, under a
@@ -219,7 +267,7 @@ fn e2e_menu_dismisses_both_ways_and_toggle_reports_expanded_state() {
 /// are what the build bakes after rewriting them for the edition. With
 /// `nested`, the page sits one directory down, as a chapter in a part
 /// does. `book/2/` exists so choosing it has somewhere to go.
-fn edition_site(own: &str, nested: bool, links: &[(&str, &str)]) -> (tempfile::TempDir, String) {
+fn edition_site(own: &str, nested: bool, links: &[ToolbarLink]) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let site = dir.path().join("prefix");
     let edition_dir = site.join("book").join(own);
@@ -232,29 +280,16 @@ fn edition_site(own: &str, nested: bool, links: &[(&str, &str)]) -> (tempfile::T
     std::fs::create_dir_all(site.join("book/2")).expect("target dir");
     std::fs::write(edition_dir.join("book.toml"), "[book]\ntitle = \"T\"\n").expect("book.toml");
 
-    let mut labels = vec!["3", "2", "1"];
-    if !labels.contains(&own) {
-        labels.insert(2, own);
+    let mut ids = vec!["3", "2", "1"];
+    if !ids.contains(&own) {
+        ids.insert(2, own);
     }
     let context = EditionsContext {
-        editions: labels
-            .iter()
-            .map(|label| EditionOption {
-                label: label.to_string(),
-                unreleased: *label == "3",
-            })
-            .collect(),
+        editions: ids.iter().map(|id| baked_edition(id)).collect(),
         current: "2".to_string(),
         own: own.to_string(),
     };
-    let links: Vec<BookLinkEntry> = links
-        .iter()
-        .map(|(p, l)| BookLinkEntry {
-            schema_path: p.to_string(),
-            label: l.to_string(),
-        })
-        .collect();
-    install_toolbar(&edition_dir, &links, Some(&context)).expect("install");
+    install_toolbar(&edition_dir, links, Some(&context)).expect("install");
 
     // The canonical as the editions build writes it: page-relative, each
     // segment percent-encoded.
@@ -297,8 +332,8 @@ fn edition_page(own: &str) -> (tempfile::TempDir, String) {
     edition_site(own, false, &[])
 }
 
-/// The switcher lists the editions in the order the build bakes them,
-/// says which is unreleased, and starts on the page's own edition.
+/// The switcher lists the editions by name in the order the build bakes
+/// them, says which is unreleased, and starts on the page's own edition.
 #[test]
 fn e2e_the_switcher_lists_editions_with_the_pages_own_selected() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -317,8 +352,9 @@ fn e2e_the_switcher_lists_editions_with_the_pages_own_selected() {
             .await
             .expect("read options");
         assert_eq!(
-            options, "3|3 (unreleased)|false,2|2|false,1|1|true",
-            "in baked order, the unreleased one marked, own selected"
+            options,
+            "3|Third edition (unreleased)|false,2|Second edition|false,1|First edition|true",
+            "by name in baked order, the unreleased one marked, own selected"
         );
     });
 }
@@ -344,8 +380,9 @@ fn e2e_choosing_an_edition_opens_its_first_page() {
     });
 }
 
-/// A reader of an older edition is told so and pointed at the current
-/// one; a reader of the unreleased edition is told that instead.
+/// A reader of an edition that is not current is told which edition it
+/// is and the releases it covers, and pointed at the current one; a
+/// reader of the unreleased edition is told that instead.
 #[test]
 fn e2e_a_non_current_edition_shows_a_banner_linking_to_the_current() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -364,8 +401,11 @@ fn e2e_a_non_current_edition_shows_a_banner_linking_to_the_current() {
             .expect("text")
             .unwrap_or_default();
         assert!(
-            text.contains(" 1 "),
-            "the banner should name the page's edition; got: {text}"
+            text.contains("First edition")
+                && text.contains("v0.1.0")
+                && text.find("v0.1.0") < text.find("v0.2.0"),
+            "the banner should name the page's edition and the first and newest release \
+             it covers, in that order; got: {text}"
         );
         let link = page
             .evaluate_value(
@@ -374,8 +414,23 @@ fn e2e_a_non_current_edition_shows_a_banner_linking_to_the_current() {
             .await
             .expect("link");
         assert!(
-            link.starts_with("2|") && link.ends_with("/book/2/"),
+            link.starts_with("Second edition|") && link.ends_with("/book/2/"),
             "the banner should name the current edition and link to its root; got: {link}"
+        );
+
+        let (_dir, url) = edition_page("rc#2");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url, None).await.expect("goto");
+        let text = page
+            .locator(".edition-banner")
+            .text_content()
+            .await
+            .expect("text")
+            .unwrap_or_default();
+        assert_eq!(
+            text.matches("v0.2.5").count(),
+            1,
+            "an edition of one release names that release once; got: {text}"
         );
 
         let (_dir, url) = edition_page("3");
@@ -388,8 +443,8 @@ fn e2e_a_non_current_edition_shows_a_banner_linking_to_the_current() {
             .expect("text")
             .unwrap_or_default();
         assert!(
-            text.contains("unreleased"),
-            "the unreleased edition's banner should say so; got: {text}"
+            text.contains("Third edition") && text.contains("unreleased"),
+            "the unreleased edition's banner should name it and say so; got: {text}"
         );
     });
 }
@@ -431,7 +486,7 @@ fn e2e_the_current_edition_shows_no_banner() {
 fn e2e_a_nested_page_resolves_links_and_editions_from_the_site_root() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let (_dir, url) = edition_site("1", true, &[("schema/v0.1.1/", "Schema")]);
+        let (_dir, url) = edition_site("1", true, &[link("schema/v0.1.1/", "Schema", None)]);
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
         let page = browser.new_page().await.expect("page");
@@ -457,6 +512,216 @@ fn e2e_a_nested_page_resolves_links_and_editions_from_the_site_root() {
         page.wait_for_url("**/prefix/book/2/", None)
             .await
             .expect("edition 2's root under the prefix should open");
+    });
+}
+
+/// The version list as text: each edition's name, then its versions in
+/// order, `*` marking the version carrying `aria-current` and `+` the
+/// page's own edition.
+const VERSION_GROUPS: &str = "Array.from(document.querySelectorAll('.schema-docs-edition'))\
+     .map(g => (g.classList.contains('own') ? '+' : '') \
+       + g.querySelector(':scope > .schema-docs-group-label').textContent + ':' \
+       + Array.from(g.querySelectorAll('a')).map(a => \
+           a.textContent + (a.getAttribute('aria-current') === 'true' ? '*' : '')).join(' '))\
+     .join('|')";
+
+/// Under editions, the button of an entry that aliased `current/` opens
+/// every version's schema docs, the edge included, grouped by edition
+/// newest first, with the page's own edition and the version its book
+/// describes marked: the newest release it covers, whatever is listed
+/// ahead of it. The list is a real button and real links, so a reader
+/// without a mouse opens it, walks into it, and closes it, landing back
+/// on the button.
+#[test]
+fn e2e_the_schema_button_lists_every_version_by_edition_and_works_from_the_keyboard() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let (_dir, url) = edition_site("2", true, &[alias("2", "Schema", "schema/")]);
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url, None).await.expect("goto");
+
+        assert_eq!(
+            page.locator("a.schema-docs-button")
+                .count()
+                .await
+                .expect("count"),
+            0,
+            "one link cannot reach every version"
+        );
+        let list = page.locator(".schema-docs-menu-list");
+        assert!(
+            !list.is_visible().await.expect("visible"),
+            "the list should start closed"
+        );
+        let toggle = page.locator(".schema-docs-menu .icon-button");
+        assert_eq!(
+            toggle.get_attribute("title").await.expect("title"),
+            Some("Schema".to_string()),
+            "a lone entry's label names the button"
+        );
+        toggle.click(None).await.expect("open");
+        assert!(list.is_visible().await.expect("visible"), "opened");
+
+        let groups = page.evaluate_value(VERSION_GROUPS).await.expect("groups");
+        assert_eq!(
+            groups,
+            "Third edition:main|+Second edition:v0.3.2-rc.1 v0.3.1* v0.3.0|\
+             First edition:v0.2.0 v0.2.0-rc.1 v0.1.0"
+        );
+        let stray = page
+            .evaluate_value(
+                "Array.from(document.querySelectorAll('.schema-docs-edition a'))\
+                 .filter(a => !a.href.endsWith('/prefix/schema/' + a.textContent + '/'))\
+                 .map(a => a.href).join(',')",
+            )
+            .await
+            .expect("hrefs");
+        assert_eq!(
+            stray, "",
+            "every version links its own schema docs under the site root"
+        );
+
+        toggle.click(None).await.expect("close");
+        toggle.focus().await.expect("focus");
+        page.keyboard().press("Enter", None).await.expect("enter");
+        assert!(
+            list.is_visible().await.expect("visible"),
+            "Enter on the button should open the list"
+        );
+        page.keyboard().press("Tab", None).await.expect("tab");
+        let focused = page
+            .evaluate_value(
+                "document.activeElement.closest('.schema-docs-menu-list') \
+                 ? document.activeElement.textContent : 'outside the list'",
+            )
+            .await
+            .expect("focused");
+        assert_eq!(
+            focused, "main",
+            "Tab should move into the list's first link"
+        );
+        page.keyboard().press("Escape", None).await.expect("escape");
+        assert!(
+            !list.is_visible().await.expect("visible"),
+            "Escape should close the list"
+        );
+        let focused = page
+            .evaluate_value("document.activeElement.className")
+            .await
+            .expect("focused");
+        assert_eq!(
+            focused, "icon-button",
+            "closing from inside the list should return focus to the button"
+        );
+    });
+}
+
+/// A book fronting several schemas keeps one control: each entry that
+/// aliased `current/` lists its versions under its own label and its own
+/// directory (the site root for a bare `current/`), and an entry naming a
+/// fixed path stays a single link beside them. An unreleased edition's
+/// book describes the edge.
+#[test]
+fn e2e_several_entries_under_editions_list_versions_under_each_alias() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let (_dir, url) = edition_site(
+            "3",
+            false,
+            &[
+                alias("3", "Wine schema", "schema/"),
+                alias("3", "CQ&A", "schema/cqa/"),
+                alias("3", "At the root", ""),
+                link("docs/model/", "Model", None),
+            ],
+        );
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url, None).await.expect("goto");
+
+        let toggle = page.locator(".schema-docs-menu .icon-button");
+        assert_eq!(
+            toggle.get_attribute("title").await.expect("title"),
+            Some("Schema reference".to_string())
+        );
+        toggle.click(None).await.expect("open");
+
+        // Each top-level entry: a schema as its label and the directories
+        // its version links sit in, a fixed path as its label and target.
+        let entries = page
+            .evaluate_value(
+                "(() => { const tail = a => a.href.split('/prefix/')[1]; \
+                 return Array.from(document.querySelectorAll('.schema-docs-menu-list > li'))\
+                 .map(li => li.classList.contains('schema-docs-schema') \
+                   ? li.querySelector(':scope > .schema-docs-group-label').textContent + '=' \
+                     + Array.from(new Set(Array.from(li.querySelectorAll('a')).map(a => \
+                         tail(a).slice(0, -(a.textContent.length + 1))))).join('+') \
+                   : li.querySelector('a').textContent + '>' + tail(li.querySelector('a')))\
+                 .join(','); })()",
+            )
+            .await
+            .expect("entries");
+        assert_eq!(
+            entries,
+            "Wine schema=schema/,CQ&A=schema/cqa/,At the root=,Model>docs/model/"
+        );
+        let one = "+Third edition:main*|Second edition:v0.3.2-rc.1 v0.3.1 v0.3.0|\
+                   First edition:v0.2.0 v0.2.0-rc.1 v0.1.0";
+        let groups = page.evaluate_value(VERSION_GROUPS).await.expect("groups");
+        assert_eq!(
+            groups,
+            format!("{one}|{one}|{one}"),
+            "once under each schema"
+        );
+    });
+}
+
+/// The asset finds the site root through the page's canonical link.
+/// Without one there is nowhere to resolve another version or edition
+/// against, so the button stays the link to the version the edition
+/// describes and the switcher stays away.
+#[test]
+fn e2e_a_page_without_a_canonical_keeps_a_plain_link_and_no_switcher() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let (dir, url) = edition_site("1", false, &[alias("1", "Schema", "schema/")]);
+        let page_file = dir.path().join("prefix/book/1/index.html");
+        let html = std::fs::read_to_string(&page_file).expect("page");
+        let without: String = html
+            .lines()
+            .filter(|line| !line.contains("rel=\"canonical\""))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert_ne!(
+            without.len(),
+            html.len(),
+            "the fixture page has a canonical"
+        );
+        std::fs::write(&page_file, without).expect("page");
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url, None).await.expect("goto");
+
+        let href = page
+            .evaluate_value("document.querySelector('a.schema-docs-button').href")
+            .await
+            .expect("href");
+        assert!(
+            href.ends_with("/book/1/schema/v0.2.0/"),
+            "the button links the described version from the book's own root; got {href}"
+        );
+        assert_eq!(
+            page.locator("select.edition-switcher, .schema-docs-menu")
+                .count()
+                .await
+                .expect("count"),
+            0
+        );
     });
 }
 
@@ -609,7 +874,7 @@ fn a_built_editions_site_links_agree_both_ways_in_a_browser() {
 /// spells differently from the id (`#` is legal in one and starts a URL
 /// fragment) still has its switcher.
 #[test]
-fn e2e_an_edition_label_the_url_spells_differently_still_gets_the_switcher() {
+fn e2e_an_edition_id_the_url_spells_differently_still_gets_the_switcher() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let (_dir, url) = edition_page("rc#2");

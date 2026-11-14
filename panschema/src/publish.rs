@@ -523,6 +523,17 @@ impl<'de> Deserialize<'de> for BookLinkConfig {
     }
 }
 
+impl BookLinkEntry {
+    /// The directory holding every version's docs, when the entry points
+    /// at the `current/` alias inside it (`schema/` for
+    /// `schema/current/`, and the root for a bare `current/`).
+    pub(crate) fn versions_root(&self) -> Option<&str> {
+        self.schema_path
+            .strip_suffix("current/")
+            .filter(|root| root.is_empty() || root.ends_with('/'))
+    }
+}
+
 impl BookLinkConfig {
     /// Every configured link, in declaration order — what was written,
     /// independent of whether the feature is switched on.
@@ -763,15 +774,18 @@ fn semver_tags(repo_root: &Path) -> Result<Vec<String>, PublishError> {
     Ok(tags.into_iter().map(|(_, tag)| tag).collect())
 }
 
-/// The newest release among `versions`; a pre-release is never one, and
-/// a version that is not semver cannot be ranked.
+/// `tag`'s version when the tag names a release. A pre-release is never
+/// one, and a tag that is not semver cannot be ranked.
+pub(crate) fn release_version(tag: &str) -> Option<semver::Version> {
+    let (_, version) = tag_semver(tag)?;
+    version.pre.is_empty().then_some(version)
+}
+
+/// The newest release among `versions`.
 pub(crate) fn newest_release(versions: &[String]) -> Option<String> {
     versions
         .iter()
-        .filter_map(|tag| {
-            let (_, version) = tag_semver(tag)?;
-            version.pre.is_empty().then_some((version, tag))
-        })
+        .filter_map(|tag| Some((release_version(tag)?, tag)))
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, tag)| tag.clone())
 }

@@ -174,7 +174,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 48 | CLI distribution for agents ([ADR-012](adr/012-cli-distribution-for-agents.md)) | Prebuilt binaries as npm platform packages, so an agent runs `npx -y panschema` with nothing installed; needs an arm64 Linux target and the crates.io publish first; a feature spec arrives when the prerequisites clear | **Decided, sequenced** |
 | 53 | [Self-Describing Datasets](features/53-self-describing-datasets.md) | Instance graphs name their dataset, version, and schema; one file per dataset; a dependency's merged schema and data as outputs | **Shipped for v0.5.0** |
 | 52 | [Book Editions](features/52-book-editions.md) | `mdbook-panschema editions` publishes the book once per schema release line, each edition built from its tag with the toolchain the tag pins | **Shipped for v0.5.0; superseded by 54** |
-| 54 | [Book Editions as Declared Spans](features/54-book-editions-as-declared-spans.md) | `mdbook-panschema editions` publishes the editions the author declares, each a book directory on `main` covering a span of releases | **In progress: slice 1 of 4** |
+| 54 | [Book Editions as Declared Spans](features/54-book-editions-as-declared-spans.md) | `mdbook-panschema editions` publishes the editions the author declares, each a book directory on `main` covering a span of releases | **In progress: slices 1 and 2 of 4** |
 | 51 | [Published Page Information Architecture](features/51-published-page-information-architecture.md) | The schema page grouped into Overview, Schema, and Instances, with a metadata card per dataset | **Slices 1–2 shipped for v0.5.0; slice 3 proposed** |
 
 ## Delivery Approach

@@ -46,13 +46,47 @@ pub struct EditionsContext {
     pub own: String,
 }
 
-/// One entry of the switcher.
+/// One edition as the toolbar shows it: an entry of the switcher and a
+/// group of the version list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EditionOption {
     /// The edition's directory under `book/`.
+    pub id: String,
+    /// What the switcher and the banner call it.
+    pub name: String,
+    /// The first and the newest release it covers; `None` while it covers
+    /// no release.
+    pub releases: Option<(String, String)>,
+    /// Every version it holds, newest first, the edge heading the newest
+    /// edition's.
+    pub versions: Vec<String>,
+}
+
+/// One schema-docs link the toolbar offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolbarLink {
+    /// Where the link goes, relative to the book's root (the site's root
+    /// under editions).
+    pub schema_path: String,
+    /// The button's tooltip when it is the only link, and its name in
+    /// the drop-down when it is not.
     pub label: String,
-    /// Covers no release yet.
-    pub unreleased: bool,
+    /// Under editions, for an entry that aliased `current/`: the
+    /// directory holding every version's docs, each of which the button
+    /// then lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub versions_root: Option<String>,
+}
+
+impl From<BookLinkEntry> for ToolbarLink {
+    fn from(entry: BookLinkEntry) -> Self {
+        Self {
+            schema_path: entry.schema_path,
+            label: entry.label,
+            versions_root: None,
+        }
+    }
 }
 
 /// Install (or refresh) the toolbar-link assets in `book_dir` per `cfg`.
@@ -65,7 +99,8 @@ pub fn install(book_dir: &Path, cfg: &BookLinkConfig) -> anyhow::Result<InstallO
     if !cfg.enabled() {
         return Ok(InstallOutcome::Disabled);
     }
-    install_toolbar(book_dir, &cfg.entries(), None)
+    let links: Vec<ToolbarLink> = cfg.entries().into_iter().map(Into::into).collect();
+    install_toolbar(book_dir, &links, None)
 }
 
 /// Install the toolbar asset with `links` to the schema docs and, for an
@@ -73,26 +108,22 @@ pub fn install(book_dir: &Path, cfg: &BookLinkConfig) -> anyhow::Result<InstallO
 /// means nothing is written.
 pub fn install_toolbar(
     book_dir: &Path,
-    links: &[BookLinkEntry],
+    links: &[ToolbarLink],
     editions: Option<&EditionsContext>,
 ) -> anyhow::Result<InstallOutcome> {
     if links.is_empty() && editions.is_none() {
         return Ok(InstallOutcome::Disabled);
     }
 
-    // One array drives both renderings: the asset draws a plain link for a
-    // single entry and a drop-down for several, so a book that grows a
+    // One array drives every rendering: the asset draws a plain link for
+    // a single entry and a drop-down for several, so a book that grows a
     // second schema needs no change here.
-    let entries: Vec<serde_json::Value> = links
-        .iter()
-        .map(|e| serde_json::json!({ "schemaPath": e.schema_path, "label": e.label }))
-        .collect();
     let editions = match editions {
         Some(context) => serde_json::to_string(context)?,
         None => "null".to_string(),
     };
     let js = SCHEMA_LINK_JS
-        .replace("__PANSCHEMA_LINKS__", &serde_json::to_string(&entries)?)
+        .replace("__PANSCHEMA_LINKS__", &serde_json::to_string(links)?)
         .replace("__PANSCHEMA_EDITIONS__", &editions);
 
     std::fs::write(book_dir.join(JS_FILENAME), js)
@@ -189,6 +220,21 @@ fn ensure_in_array(doc: &mut DocumentMut, key: &str, val: &str) -> anyhow::Resul
         array.push(val);
     }
     Ok(())
+}
+
+/// The JSON the asset `js` declares as `var <name> = …;`.
+#[cfg(test)]
+pub(crate) fn baked_json(js: &str, name: &str) -> serde_json::Value {
+    let declaration = format!("var {name} = ");
+    let start = js
+        .find(&declaration)
+        .unwrap_or_else(|| panic!("the asset declares `{name}`"))
+        + declaration.len();
+    // `lines` reads the asset whether its checkout ends lines in LF or
+    // CRLF.
+    let value = js[start..].lines().next().expect("the declaration ends");
+    serde_json::from_str(value.trim_end_matches(';'))
+        .unwrap_or_else(|e| panic!("`{name}` is baked as JSON: {e}; got {value}"))
 }
 
 #[cfg(test)]
@@ -362,34 +408,68 @@ mod tests {
         EditionsContext {
             editions: vec![
                 EditionOption {
-                    label: "v0.2".to_string(),
-                    unreleased: false,
+                    id: "2".to_string(),
+                    name: "Second edition".to_string(),
+                    releases: None,
+                    versions: vec!["main".to_string()],
                 },
                 EditionOption {
-                    label: "main".to_string(),
-                    unreleased: true,
+                    id: "1".to_string(),
+                    name: "First edition".to_string(),
+                    releases: Some(("v0.1.0".to_string(), "v0.2.0".to_string())),
+                    versions: vec!["v0.2.0".to_string(), "v0.1.0".to_string()],
                 },
             ],
-            current: "v0.2".to_string(),
+            current: "1".to_string(),
             own: own.to_string(),
         }
     }
 
+    /// What an editions build hands the asset arrives as JSON it can
+    /// read: each link, with the directory of its versions when it has
+    /// one, and the editions the page belongs among.
     #[test]
-    fn the_editions_context_is_baked_in_as_json() {
+    fn the_links_and_the_editions_context_are_baked_in_as_json() {
         let dir = book_dir();
-        install_toolbar(dir.path(), &[], Some(&ctx("main"))).unwrap();
+        let link = |path: &str, versions_root: Option<&str>| ToolbarLink {
+            schema_path: path.to_string(),
+            label: "Schema".to_string(),
+            versions_root: versions_root.map(str::to_string),
+        };
+        install_toolbar(
+            dir.path(),
+            &[link("schema/v0.2.0/", Some("schema/")), link("docs/", None)],
+            Some(&ctx("2")),
+        )
+        .unwrap();
         let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();
 
-        assert!(
-            js.contains(r#""own":"main""#)
-                && js.contains(r#""current":"v0.2""#)
-                && js.contains(r#"{"label":"main","unreleased":true}"#),
-            "got:\n{js}"
+        assert_eq!(
+            baked_json(&js, "links"),
+            serde_json::json!([
+                {"schemaPath": "schema/v0.2.0/", "label": "Schema", "versionsRoot": "schema/"},
+                {"schemaPath": "docs/", "label": "Schema"},
+            ])
+        );
+        assert_eq!(
+            baked_json(&js, "editions"),
+            serde_json::json!({
+                "editions": [
+                    {"id": "2", "name": "Second edition", "releases": null, "versions": ["main"]},
+                    {
+                        "id": "1",
+                        "name": "First edition",
+                        "releases": ["v0.1.0", "v0.2.0"],
+                        "versions": ["v0.2.0", "v0.1.0"],
+                    },
+                ],
+                "current": "1",
+                "own": "2",
+            })
         );
         assert!(
-            !js.contains("__PANSCHEMA_EDITIONS__"),
-            "the placeholder must be substituted; got:\n{js}"
+            !js.contains("__PANSCHEMA_EDITIONS__") && !js.contains("__PANSCHEMA_LINKS__"),
+            "the placeholders must be substituted; got:\n{js}"
         );
     }
 
@@ -412,7 +492,7 @@ mod tests {
     fn editions_alone_install_the_asset_and_wire_the_book() {
         let dir = book_dir();
 
-        let outcome = install_toolbar(dir.path(), &[], Some(&ctx("v0.2"))).unwrap();
+        let outcome = install_toolbar(dir.path(), &[], Some(&ctx("1"))).unwrap();
 
         assert_eq!(outcome, InstallOutcome::Installed);
         let book_toml = std::fs::read_to_string(dir.path().join("book.toml")).unwrap();

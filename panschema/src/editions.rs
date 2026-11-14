@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use semver::Version;
 
 use crate::publish::{
-    BookLinkEntry, DeclaredEdition, EditionsConfig, PUBLISH_FILENAME, PublishConfig, PublishError,
+    DeclaredEdition, EditionsConfig, PUBLISH_FILENAME, PublishConfig, PublishError,
     PublishingConfig,
 };
 
@@ -45,7 +45,19 @@ impl Edition {
     /// Whether the edition covers a release yet. A pre-release is not
     /// one, so an edition holding only those is still unreleased.
     pub fn is_released(&self) -> bool {
-        crate::publish::newest_release(&self.versions).is_some()
+        self.release_span().is_some()
+    }
+
+    /// The first and the newest release the edition covers, or `None`
+    /// while it covers none: the first and the last release in
+    /// `versions`, which runs oldest first.
+    pub fn release_span(&self) -> Option<(&str, &str)> {
+        let mut releases = self
+            .versions
+            .iter()
+            .filter(|tag| crate::publish::release_version(tag).is_some());
+        let first = releases.next()?;
+        Some((first, releases.next_back().unwrap_or(first)))
     }
 }
 
@@ -83,15 +95,32 @@ impl EditionPlan {
     }
 
     /// What the toolbar asset of edition `own` is told: every edition in
-    /// switcher order, the current one, and itself.
+    /// switcher order with the versions it holds, the current one, and
+    /// itself.
     pub fn toolbar_context(&self, own: &str) -> crate::mdbook::EditionsContext {
         crate::mdbook::EditionsContext {
             editions: self
                 .editions
                 .iter()
-                .map(|e| crate::mdbook::EditionOption {
-                    label: e.id.clone(),
-                    unreleased: !e.is_released(),
+                .enumerate()
+                .map(|(index, e)| {
+                    // The edge belongs to the newest edition, ahead of
+                    // its releases. An edge that names one of them is
+                    // that version's build, listed once.
+                    let edge =
+                        (index == 0 && !e.versions.contains(&self.edge)).then_some(&self.edge);
+                    crate::mdbook::EditionOption {
+                        id: e.id.clone(),
+                        name: e.name.clone(),
+                        releases: e
+                            .release_span()
+                            .map(|(first, newest)| (first.to_string(), newest.to_string())),
+                        versions: edge
+                            .into_iter()
+                            .chain(e.versions.iter().rev())
+                            .cloned()
+                            .collect(),
+                    }
                 })
                 .collect(),
             current: self.current.clone(),
@@ -555,21 +584,24 @@ fn build_one(
     // The toolbar asset always comes from the running binary: the book's
     // own copy, if it has one, is gitignored anyway. An entry aliasing
     // `current/` is pointed at the version the edition describes, so a
-    // reader reaches the schema docs the book was written against.
-    let links: Vec<BookLinkEntry> = cfg
+    // reader reaches the schema docs the book was written against, and
+    // names the directory every version's docs sit in, so the button
+    // can list them all.
+    let links: Vec<crate::mdbook::ToolbarLink> = cfg
         .book_link
         .as_ref()
         .filter(|link| link.enabled())
         .map(|link| link.entries())
         .unwrap_or_default()
         .into_iter()
-        .map(|mut entry| {
-            let alias = entry.schema_path == "current/" || entry.schema_path.ends_with("/current/");
-            if alias {
-                let base = &entry.schema_path[..entry.schema_path.len() - "current/".len()];
-                entry.schema_path = format!("{base}{}/", edition.schema_version);
+        .map(|entry| {
+            let versions_root = entry.versions_root().map(str::to_string);
+            let mut link = crate::mdbook::ToolbarLink::from(entry);
+            if let Some(root) = versions_root {
+                link.schema_path = format!("{root}{}/", edition.schema_version);
+                link.versions_root = Some(root);
             }
-            entry
+            link
         })
         .collect();
     let context = plan.toolbar_context(&edition.id);
@@ -1086,6 +1118,67 @@ mod tests {
             plan.editions[1].is_released(),
             "the first edition covers both releases; got {:?}",
             plan.editions[1]
+        );
+    }
+
+    /// What the toolbar is told of each edition: what to call it, the
+    /// first and the newest release it covers (a pre-release is neither,
+    /// at either end), and every version it holds newest first, with the
+    /// edge heading the newest edition's unless it names one of them.
+    #[test]
+    fn the_toolbar_is_told_each_editions_name_releases_and_versions() {
+        let plan = plan_of(
+            r#"versions = ["v0.1.0", "v0.2.0-rc.1", "v0.2.0", "v0.2.1-rc.1", "v0.3.0-rc.1", "v0.3.0", "v0.4.0-rc.1"]
+               edge = "main"
+               current = "v0.2.0""#,
+            &(edition("1", "book/1", "v0.1.0")
+                + "name = \"First edition\"\n"
+                + &edition("2", "book/2", "v0.3.0")
+                + &edition("3", "book/3", "v0.4.0")),
+        )
+        .unwrap();
+
+        let context = plan.toolbar_context("2");
+
+        assert_eq!((context.own.as_str(), context.current.as_str()), ("2", "1"));
+        let option = |id: &str, name: &str, releases: Option<(&str, &str)>, versions: &[&str]| {
+            crate::mdbook::EditionOption {
+                id: id.to_string(),
+                name: name.to_string(),
+                releases: releases.map(|(first, newest)| (first.to_string(), newest.to_string())),
+                versions: versions.iter().map(|v| v.to_string()).collect(),
+            }
+        };
+        assert_eq!(
+            context.editions,
+            [
+                option("3", "3", None, &["main", "v0.4.0-rc.1"]),
+                option(
+                    "2",
+                    "2",
+                    Some(("v0.3.0", "v0.3.0")),
+                    &["v0.3.0", "v0.3.0-rc.1"]
+                ),
+                option(
+                    "1",
+                    "First edition",
+                    Some(("v0.1.0", "v0.2.0")),
+                    &["v0.2.1-rc.1", "v0.2.0", "v0.2.0-rc.1", "v0.1.0"]
+                ),
+            ]
+        );
+
+        let tagged_edge = plan_of(
+            r#"versions = ["v0.1.0", "v0.3.0"]
+               edge = "v0.3.0"
+               current = "v0.3.0""#,
+            &two_editions(),
+        )
+        .unwrap();
+        assert_eq!(
+            tagged_edge.toolbar_context("2").editions[0].versions,
+            ["v0.3.0"],
+            "an edge that names a listed version is listed once"
         );
     }
 
@@ -2445,6 +2538,7 @@ mod build_tests {
         let repo = book_repo();
         let links = "[[book_link]]\nschema_path = \"schema/current/\"\nlabel = \"Schema\"\n\
                      [[book_link]]\nschema_path = \"schema/cqa/current/\"\nlabel = \"CQ&A\"\n\
+                     [[book_link]]\nschema_path = \"current/\"\nlabel = \"At the root\"\n\
                      [[book_link]]\nschema_path = \"docs/model/\"\nlabel = \"Model\"\n\
                      [[book_link]]\nschema_path = \"docs/concurrent/\"\nlabel = \"Not an alias\"\n";
         build_editions(
@@ -2454,25 +2548,23 @@ mod build_tests {
         )
         .unwrap();
 
-        let book = repo.path().join("site/book");
-        let first = read(book.join("1/schema-link.js"));
-        assert!(
-            first.contains(r#""schemaPath":"schema/v0.1.1/""#)
-                && first.contains(r#""schemaPath":"schema/cqa/v0.1.1/""#)
-                && first.contains(r#""schemaPath":"docs/model/""#)
-                && first.contains(r#""schemaPath":"docs/concurrent/""#),
-            "the first edition links its newest release, and keeps a path that is not an alias; got:\n{first}"
+        let baked_links = |edition: &str| {
+            let asset = repo.path().join("site/book").join(edition);
+            crate::mdbook::baked_json(&read(asset.join("schema-link.js")), "links")
+        };
+        assert_eq!(
+            baked_links("1"),
+            serde_json::json!([
+                {"schemaPath": "schema/v0.1.1/", "label": "Schema", "versionsRoot": "schema/"},
+                {"schemaPath": "schema/cqa/v0.1.1/", "label": "CQ&A", "versionsRoot": "schema/cqa/"},
+                {"schemaPath": "v0.1.1/", "label": "At the root", "versionsRoot": ""},
+                {"schemaPath": "docs/model/", "label": "Model"},
+                {"schemaPath": "docs/concurrent/", "label": "Not an alias"},
+            ]),
+            "an alias links the edition's newest release and says where every version's \
+             docs live; a path that names no version is kept as written"
         );
-        assert!(
-            !first.contains(r#""schemaPath":"schema/current/""#)
-                && !first.contains(r#""schemaPath":"schema/cqa/current/""#),
-            "no alias may survive into an edition's links; got:\n{first}"
-        );
-        let second = read(book.join("2/schema-link.js"));
-        assert!(
-            second.contains(r#""schemaPath":"schema/v0.2.0/""#),
-            "got:\n{second}"
-        );
+        assert_eq!(baked_links("2")[0]["schemaPath"], "schema/v0.2.0/");
     }
 
     #[test]
@@ -2503,22 +2595,19 @@ mod build_tests {
         );
         assert_eq!(
             baked(repo.path().join("site/book/3/schema-link.js"))["editions"][0],
-            serde_json::json!({"label": "3", "unreleased": true}),
-            "the switcher marks it unreleased"
+            serde_json::json!({
+                "id": "3",
+                "name": "3",
+                "releases": null,
+                "versions": ["main"],
+            }),
+            "the toolbar is told it covers no release and holds the edge"
         );
     }
 
     /// The editions context the build baked into a toolbar asset.
     fn baked(asset: impl AsRef<Path>) -> serde_json::Value {
-        let js = read(asset);
-        let start = js
-            .find("var editions = ")
-            .expect("the asset declares its editions")
-            + "var editions = ".len();
-        // `lines` reads the asset whether its checkout ends lines in LF
-        // or CRLF.
-        let declaration = js[start..].lines().next().expect("the declaration ends");
-        serde_json::from_str(declaration.trim_end_matches(';')).expect("the baked context is JSON")
+        crate::mdbook::baked_json(&read(asset), "editions")
     }
 
     #[test]
@@ -2530,8 +2619,18 @@ mod build_tests {
             baked(repo.path().join("site/book/1/schema-link.js")),
             serde_json::json!({
                 "editions": [
-                    {"label": "2", "unreleased": false},
-                    {"label": "1", "unreleased": false},
+                    {
+                        "id": "2",
+                        "name": "2",
+                        "releases": ["v0.2.0", "v0.2.0"],
+                        "versions": ["main", "v0.2.0"],
+                    },
+                    {
+                        "id": "1",
+                        "name": "1",
+                        "releases": ["v0.1.0", "v0.1.1"],
+                        "versions": ["v0.1.1", "v0.1.0"],
+                    },
                 ],
                 "current": "2",
                 "own": "1",
