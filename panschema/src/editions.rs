@@ -2515,8 +2515,10 @@ mod build_tests {
             .find("var editions = ")
             .expect("the asset declares its editions")
             + "var editions = ".len();
-        let end = js[start..].find(";\n").expect("the declaration ends") + start;
-        serde_json::from_str(&js[start..end]).expect("the baked context is JSON")
+        // `lines` reads the asset whether its checkout ends lines in LF
+        // or CRLF.
+        let declaration = js[start..].lines().next().expect("the declaration ends");
+        serde_json::from_str(declaration.trim_end_matches(';')).expect("the baked context is JSON")
     }
 
     #[test]
