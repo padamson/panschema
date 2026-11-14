@@ -97,10 +97,15 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 - **Writers follow LinkML more closely**: JSON Schema and OpenAPI give a class-ranged slot the shape its inlining declares; generated Rust gives each identified class an id type that references hold; a Postgres table for a class its `key` names keys on a synthetic `uuid`, with the key unique within its scope; Rust and Postgres DDL follow a slot's cardinality bounds, not only its flags. Shipped.
 - **Graph layout**: the layout numerics are vendored rather than taken from a git dependency, a long, thin graph lies along the canvas, and Kamada-Kawai settles further, runs far faster on larger graphs, handles graphs with more than one connected piece, and stops when it cannot converge. Shipped.
 
-### v0.6.0+ — Future Directions
-*Planned, and further out, aspirational.*
+### v0.6.0 — Book Editions as Declared Spans ✅ (released 2026-11-14)
 
-- **Book editions as declared spans** ([feature 54](features/54-book-editions-as-declared-spans.md)): `mdbook-panschema editions` publishes the editions the book's author declares, each a book directory on `main` covering a span of releases, in place of feature 52's one edition per release line. Slice 1 of 4 in progress.
+**Goal:** Publish the books a schema's author actually writes, each covering the releases it describes, rather than one book per release line.
+
+- **Book editions as declared spans** ([feature 54](features/54-book-editions-as-declared-spans.md)): `mdbook-panschema editions` publishes the editions the book's author declares, each a book directory on `main` covering a span of releases, in place of feature 52's one edition per release line. Every edition builds from the edge with one optional pinned toolchain. The switcher names the editions, the banner names the releases an older edition covers, and the schema button lists every version's schema docs grouped by edition. `mdbook-panschema editions --authoring` prints the book new chapters go into. Shipped.
+- **Exit codes**: `mdbook-panschema` exits 2 when a command cannot run, as `panschema` does. Shipped.
+
+### v0.7.0+ — Future Directions
+*Planned, and further out, aspirational.*
 
 - **Bootstrap LinkML IR from the metaschema** ([feature 08](features/08-bootstrap-linkml-ir.md), inside the `panschema-model` crate of [feature 46](features/46-panschema-model-crate.md)): replace the hand-rolled `panschema-model/src/linkml.rs` types with types generated from the LinkML metaschema YAML via panschema's own `RustWriter`. Closes the drift between panschema's IR and the LinkML spec by construction, and doubles as the most aggressive `RustWriter` dogfood we have — the metaschema is the hardest schema we'll feed it. Pairs with feature 07: once the IR is metaschema-derived, validation rules can be coded against canonical field names. The [LinkML coverage matrix](linkml-coverage.md) tracks today's per-metaslot, per-writer support and the prioritized gaps this would close.
 - **Schema validation** ([feature 07](features/07-schema-validation.md)): a `panschema verify --schema <schema>` form that checks a LinkML schema against the metaschema and surfaces actionable diagnostics. A flag on `fetch --check` can gate CI on it (feature 07 slice 3).
@@ -174,7 +179,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 48 | CLI distribution for agents ([ADR-012](adr/012-cli-distribution-for-agents.md)) | Prebuilt binaries as npm platform packages, so an agent runs `npx -y panschema` with nothing installed; needs an arm64 Linux target and the crates.io publish first; a feature spec arrives when the prerequisites clear | **Decided, sequenced** |
 | 53 | [Self-Describing Datasets](features/53-self-describing-datasets.md) | Instance graphs name their dataset, version, and schema; one file per dataset; a dependency's merged schema and data as outputs | **Shipped for v0.5.0** |
 | 52 | [Book Editions](features/52-book-editions.md) | `mdbook-panschema editions` publishes the book once per schema release line, each edition built from its tag with the toolchain the tag pins | **Shipped for v0.5.0; superseded by 54** |
-| 54 | [Book Editions as Declared Spans](features/54-book-editions-as-declared-spans.md) | `mdbook-panschema editions` publishes the editions the author declares, each a book directory on `main` covering a span of releases | **Complete; ships in v0.6.0** |
+| 54 | [Book Editions as Declared Spans](features/54-book-editions-as-declared-spans.md) | `mdbook-panschema editions` publishes the editions the author declares, each a book directory on `main` covering a span of releases | **Shipped for v0.6.0** |
 | 51 | [Published Page Information Architecture](features/51-published-page-information-architecture.md) | The schema page grouped into Overview, Schema, and Instances, with a metadata card per dataset | **Slices 1–2 shipped for v0.5.0; slice 3 proposed** |
 
 ## Delivery Approach

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-14
+
 ### Changed
 - **`mdbook-panschema editions` publishes the editions the author declares, each covering a span of releases, instead of one per release line.** A release line was the wrong unit: three minors can belong in one book, and a rewrite can start at any release, so v0.5.0 published books nobody wrote, each a prefix of the next. Each `[[editions.edition]]` in `panschema-publish.toml` names an `id` (served at `<output_dir>/book/<id>/`), an optional `name`, the `book` directory holding its `book.toml`, and `from`, the first release it covers; the next edition's `from` closes the span, so every release in `[publishing]` belongs to exactly one edition, a pre-release to the edition of the release it precedes, and the edge to the newest edition, which alone may cover no release yet (a pre-release is not one). One edition may be marked `authoring = true`; otherwise the newest is. `mdbook-panschema editions --authoring` prints that edition's book directory and builds nothing, so a script finds the book new chapters go into without parsing the spec. Every edition builds from `[publishing].edge`, now required, through a scratch index, so an old edition is fixed by an ordinary commit and the working tree is never touched; the canonical links, the root copy, and each schema version's brand link to its edition work as before. The switcher lists the editions by `name`, and the banner on a page of an edition that is not current names the edition and the releases it covers. All editions build with one optional `[editions.toolchain]` (an `mdbook` version and `[[editions.toolchain.plugin]]` pins, a plugin's `branch` included), checked when the spec is read, and a tool it leaves out comes from `PATH`. The schema button of a `[book_link]` entry aliasing `current/` opens a list of every version's schema docs, the edge included, grouped by edition newest first, with the page's own edition and the version its book describes (its newest release, or the edge while it has none) standing out; an entry naming a fixed path stays one link. v0.5.0's form is refused when the spec is read: an `[editions]` with no `[[editions.edition]]` says to add one, and `[editions].book` and the per-tag `[editions.toolchain."<tag>"]` are unknown keys. A `toolchain.toml` left beside a book, where v0.5.0 kept the pins, stops the build and names the table they move to. A dependency's `[editions]` is not read, so a package released with the old form still resolves.
 - **`mdbook-panschema` exits 2 when a command cannot run.** Every failure exited 1, while `panschema` has exited 2 for a command that cannot run since v0.5.0. `install` and `editions` now do the same, as clap already did for a bad flag. **Breaking:** a script that tests for exit 1 from `mdbook-panschema` must test for 2.
@@ -398,7 +400,8 @@ Initial release of rontodoc — a fast, single-binary ontology documentation gen
 - Responsive two-column layout with dark mode support.
 - Component-driven UI with style guide (`--features dev`).
 
-[Unreleased]: https://github.com/padamson/panschema/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/padamson/panschema/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/padamson/panschema/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/padamson/panschema/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/padamson/panschema/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/padamson/panschema/compare/v0.3.0...v0.3.1
