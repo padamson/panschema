@@ -22,10 +22,11 @@ panschema/viz-bundle/
 # skills-lock.json (committed); the content is fetched, so it is not vendored
 # here. The Claude Code entry point is a symlink into .agents/, so tracking it
 # would leave a dangling link in any clone that has not run the install.
-# panschema's own skill lives in skills/ and is never installed here, so no
-# negation is needed.
+# panschema's shipped skill lives in skills/ and is never installed here. The
+# contributor skill is written here and tracked, so it is the one negation.
 .agents/
-.claude/skills/
+.claude/skills/*
+!.claude/skills/panschema-dev/
 
 # Claude Code. The sandbox block is tracked in .claude/settings.json so every
 # clone gets the same one; personal permission allowlists and local state are

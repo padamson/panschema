@@ -139,6 +139,13 @@ Pre-commit hooks enforce these automatically.
 
 ## Agent skills
 
+`.claude/skills/panschema-dev/` is the contributor skill: the design
+principle worked out per writer, the checklist for carrying a LinkML
+construct through every writer, the test oracles, and the gate, viz,
+release, and supply-chain mechanics. It is tracked, and Claude Code loads
+it in every session here. `skills/panschema-usage/` is the skill panschema
+ships to schema authors.
+
 The e2e tier is written against `playwright-rs`, and that crate ships a
 skill for it. It is a pinned dependency like any other: `skills-lock.json`
 (committed) records the source and a content hash, and `npx skills add`
