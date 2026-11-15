@@ -1,7 +1,7 @@
 <article class="entity-card class-card" id="class-{{ id }}">
     <header class="entity-header">
         <div class="entity-badge class-badge">Class</div>
-        <h3 class="entity-title">{{ label }}{% if is_abstract %} <span class="abstract-badge" title="Abstract class: not meant to be instantiated directly">abstract</span>{% endif %}{% if let Some(note) = deprecated %} <span class="deprecated-badge" title="{{ note }}">Deprecated</span>{% endif %}</h3>
+        <h3 class="entity-title">{{ label }}{% if is_abstract %} <span class="abstract-badge" title="Abstract class: not meant to be instantiated directly">abstract</span>{% endif %}{% if is_mixin %} <span class="mixin-badge" title="Mixin class: its slots are taken on by the classes that list it under Mixes in">mixin</span>{% endif %}{% if let Some(note) = deprecated %} <span class="deprecated-badge" title="{{ note }}">Deprecated</span>{% endif %}</h3>
         <button class="copy-btn" data-copy="{% match iri_href %}{% when Some with (href) %}{{ href }}{% when None %}{{ iri }}{% endmatch %}" title="Copy IRI">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -264,10 +264,11 @@
         color: var(--color-property);
     }
 
-    /* Subtle "abstract" badge next to the class title — uppercase
-       to read as a category tag, muted color so it doesn't compete
-       with the title itself. */
-    .abstract-badge {
+    /* Subtle "abstract" or "mixin" badge next to the class title —
+       uppercase to read as a category tag, muted color so it doesn't
+       compete with the title itself. */
+    .abstract-badge,
+    .mixin-badge {
         margin-left: var(--space-2);
         padding: 2px var(--space-2);
         font-size: var(--text-xs);

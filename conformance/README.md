@@ -44,6 +44,22 @@ precedence, which takes each field from the first ancestor in that order
 that sets it.
 
 ```bash
+uv run --project conformance conformance/probe_mixin_flag.py
+```
+
+The mixin-flag probe runs `gen-sqlddl`, `gen-shacl`, `gen-json-schema`,
+`gen-pydantic`, and `gen-owl` over an abstract class, a `mixin: true`
+class, and a concrete class using both, prints what each generator emits
+for them, and asks `linkml-validate` whether it accepts a record typed as
+each. Every generator gives the abstract class and the mixin a table, a
+shape, a definition, and a model, and the validator accepts both records:
+LinkML enforces neither flag, and both say the class holds no records of
+its own. It is the evidence behind the Postgres writer emitting no table
+for either while the SHACL and JSON Schema writers keep the shape and the
+definition. `gen-owl` fetches from `w3id.org`, so run it with network
+access.
+
+```bash
 uv run --project conformance conformance/probe_permissible_value_iri.py
 ```
 

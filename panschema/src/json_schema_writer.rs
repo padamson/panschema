@@ -672,6 +672,36 @@ classes:
     }
 
     #[test]
+    fn a_slot_ranging_over_a_declared_mixin_refs_its_definition() {
+        // gen-json-schema emits a definition for a mixin too.
+        let mut schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: depot
+classes:
+  Stamped:
+    mixin: true
+    attributes:
+      stamp:
+        range: integer
+  Parcel:
+    attributes:
+      seal:
+        range: Stamped
+",
+        )
+        .expect("parse schema");
+        for (name, class) in schema.classes.iter_mut() {
+            class.name = name.clone();
+        }
+        let defs = &build_json_schema(&schema)["$defs"];
+        assert_eq!(
+            defs["Parcel"]["properties"]["seal"]["$ref"],
+            "#/$defs/Stamped"
+        );
+        assert_eq!(defs["Stamped"]["properties"]["stamp"]["type"], "integer");
+    }
+
+    #[test]
     fn custom_types_resolve_to_base_scalar_and_facets() {
         let mut schema: SchemaDefinition = serde_norway::from_str(
             "\

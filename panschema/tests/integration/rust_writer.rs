@@ -664,6 +664,17 @@ fn main() {
     let roster_back: codegen::Roster =
         serde_json::from_value(roster_json).expect("deserialize serialized Roster");
     assert_eq!(roster_back, roster, "dict collections round-trip");
+
+    // A slot ranging over a trait nothing implements holds no value, and
+    // one in the data is refused.
+    let holder: codegen::Holder =
+        serde_json::from_str("{}").expect("deserialize a Holder with nothing held");
+    assert_eq!(holder.pending, None);
+    assert!(holder.archetypes.is_empty());
+    assert!(
+        serde_json::from_str::<codegen::Holder>(r#"{"pending": {"note": "x"}}"#).is_err(),
+        "no class implements Pending, so no value can be read as one"
+    );
 }
 "##;
 

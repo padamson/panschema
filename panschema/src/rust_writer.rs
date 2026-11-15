@@ -441,9 +441,11 @@ fn validate_generated_names(schema: &SchemaDefinition) -> IoResult<()> {
 // Class roles
 // ---------------------------------------------------------------------------
 
-/// Classifies each class as either a marker `Trait` (named as the `is_a`
-/// parent of some other class OR used as a `mixin`) or a concrete
-/// `Struct` (leaf class — never inherited from, never mixed in).
+/// Classifies each class as either a marker `Trait` (declared `abstract`
+/// or `mixin`, named as the `is_a` parent of some other class, or used as
+/// a `mixin`) or a concrete `Struct` (an undeclared leaf class). A
+/// declared class is a trait before anything inherits from it, so its
+/// generated type does not change when the first class does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClassRole {
     Trait,
@@ -462,9 +464,9 @@ fn compute_class_roles(schema: &SchemaDefinition) -> BTreeMap<String, ClassRole>
     }
     schema
         .classes
-        .keys()
-        .map(|name| {
-            let role = if used_as_parent_or_mixin.contains(name) {
+        .iter()
+        .map(|(name, class)| {
+            let role = if class.is_abstract_or_mixin() || used_as_parent_or_mixin.contains(name) {
                 ClassRole::Trait
             } else {
                 ClassRole::Struct
@@ -884,6 +886,21 @@ pub mod {module} {{
     )
 }
 
+/// The doc line naming a class's LinkML kind when it is abstract, a mixin,
+/// or both, set off by a blank doc line from a description above it.
+fn render_class_kind_doc<W: Write>(out: &mut W, def: &ClassDefinition) -> fmt::Result {
+    let kind = match (def.r#abstract, def.mixin) {
+        (true, true) => "abstract mixin",
+        (true, false) => "abstract",
+        (false, true) => "mixin",
+        (false, false) => return Ok(()),
+    };
+    if def.description.as_deref().is_some_and(|d| !d.is_empty()) {
+        out.write_str("///\n")?;
+    }
+    writeln!(out, "/// LinkML {kind} class.")
+}
+
 /// Emit a marker trait for a class that's used as an `is_a` parent or
 /// mixin. Supertrait bounds combine the class's own `is_a` parent and
 /// any mixins that themselves resolve to traits in this schema.
@@ -895,6 +912,7 @@ fn render_trait<W: Write>(
     roles: &BTreeMap<String, ClassRole>,
 ) -> fmt::Result {
     render_doc_comment(out, "", def.description.as_deref())?;
+    render_class_kind_doc(out, def)?;
 
     let mut supertraits: Vec<String> = Vec::new();
     if let Some(parent) = &def.is_a
@@ -936,9 +954,6 @@ fn render_class<W: Write>(
         ..
     } = *ctx;
     render_doc_comment(out, "", def.description.as_deref())?;
-    if def.r#abstract {
-        out.write_str("///\n/// LinkML abstract class.\n")?;
-    }
 
     // Diagnostics for unresolved global slot references: any name in
     // `class.slots` that isn't present in `schema.slots`. We emit a
@@ -1186,16 +1201,19 @@ fn render_kind_enum<W: Write>(
         .collect();
 
     if descendants.is_empty() {
-        // Trait class declared but no concrete descendant impls it.
-        // The `<Name>Kind` enum would have zero variants — emit a
-        // breadcrumb comment so a reader understands why a slot
-        // ranging over `<Name>` falls back to `String` (see
-        // `type_for_range`).
+        // No class implements the trait yet, so the closed enum has no
+        // variant and nothing to dispatch on: a slot ranging over the
+        // trait can hold no value, and a value in the data is refused.
         write!(
             out,
-            "// NOTE: `{name}` has no concrete descendants in this schema;\n\
-             //       no `{name}Kind` enum is emitted. Slots ranging over\n\
-             //       `{name}` fall back to `String` at the field level.\n\n"
+            "/// Closed enum of concrete classes that implement `{name}`. No class\n\
+             /// does yet, so a slot ranging over `{name}` can hold no value.\n\
+             #[derive({})]\n\
+             #[serde(untagged)]\n\
+             #[non_exhaustive]\n\
+             pub enum {} {{}}\n\n",
+            enum_derive_line(true, true),
+            type_ident(&format!("{name}Kind"))
         )?;
         return Ok(false);
     }
@@ -1391,22 +1409,12 @@ fn render_any_of_enum<W: Write>(
 }
 
 /// The Rust type a reference to a Trait-role class takes: the
-/// closed-enum wrapper of its concrete descendants — unless there are
-/// none, in which case no Kind enum is emitted and the reference falls
-/// back to `String` (URI/identifier), mirroring the breadcrumb comment
-/// `render_kind_enum` emits. Field sites route here through
-/// `type_for_range`; union variants skip their member entirely in the
-/// descendant-less case instead of taking the `String` fallback.
-fn class_reference_type(
-    name: &str,
-    schema: &SchemaDefinition,
-    roles: &BTreeMap<String, ClassRole>,
-) -> String {
-    if has_concrete_descendants(name, schema, roles) {
-        type_ident(&format!("{name}Kind")).into_owned()
-    } else {
-        "String".to_string()
-    }
+/// closed-enum wrapper of its concrete descendants, which has no variant
+/// while there are none. Field sites route here through `type_for_range`;
+/// a union skips a member with no concrete descendant instead of carrying
+/// a variant nothing can construct.
+fn class_reference_type(name: &str) -> String {
+    type_ident(&format!("{name}Kind")).into_owned()
 }
 
 /// Each class's effective designator slot, resolved once per render —
@@ -1885,7 +1893,7 @@ fn type_for_range(range: &str, ctx: &RenderCtx<'_>) -> String {
         },
         other => {
             if roles.get(other) == Some(&ClassRole::Trait) {
-                class_reference_type(other, schema, roles)
+                class_reference_type(other)
             } else if schema.classes.contains_key(other) || schema.enums.contains_key(other) {
                 type_ident(other).into_owned()
             } else if schema.types.contains_key(other) {
@@ -2753,6 +2761,57 @@ mod tests {
         let roles = compute_class_roles(&schema);
         assert_eq!(roles["Tagged"], ClassRole::Trait);
         assert_eq!(roles["Item"], ClassRole::Struct);
+    }
+
+    #[test]
+    fn a_class_declared_abstract_or_mixin_is_a_trait_before_anything_inherits_from_it() {
+        // The declaration fixes the type: it does not change from struct
+        // to trait when the first class inherits from it.
+        for flag in ["abstract", "mixin"] {
+            let schema = schema_from_yaml(&format!(
+                "name: s
+classes:
+  Grouping:
+    {flag}: true
+    attributes:
+      stamp: {{range: integer}}
+  Parcel:
+    attributes:
+      seal: {{range: Grouping}}
+"
+            ));
+
+            let out = RustWriter::new().render(&schema);
+            assert!(ast::has_trait(&out, "Grouping"), "{flag}; got: {out}");
+            assert!(!ast::has_struct(&out, "Grouping"), "{flag}; got: {out}");
+            assert_eq!(
+                ast::field_type(&out, "Parcel", "seal"),
+                Some(ast::ty("Option<GroupingKind>")),
+                "{flag}: a slot ranging over it holds one of its implementors; got: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_kind_doc_line_names_the_flags_and_follows_a_description_after_a_blank() {
+        let doc = |description: Option<&str>, is_abstract: bool, mixin: bool| {
+            let mut class = ClassDefinition::new("C");
+            class.description = description.map(str::to_string);
+            class.r#abstract = is_abstract;
+            class.mixin = mixin;
+            let mut out = String::new();
+            render_class_kind_doc(&mut out, &class).unwrap();
+            out
+        };
+        assert_eq!(doc(None, false, false), "");
+        assert_eq!(doc(None, false, true), "/// LinkML mixin class.\n");
+        assert_eq!(doc(None, true, false), "/// LinkML abstract class.\n");
+        assert_eq!(doc(None, true, true), "/// LinkML abstract mixin class.\n");
+        assert_eq!(doc(Some(""), false, true), "/// LinkML mixin class.\n");
+        assert_eq!(
+            doc(Some("A bundle."), false, true),
+            "///\n/// LinkML mixin class.\n"
+        );
     }
 
     #[test]
@@ -4060,6 +4119,10 @@ mod tests {
         let out = RustWriter::new().render(&schema);
         assert!(ast::has_trait(&out, "Animal"), "got: {out}");
         assert!(
+            out.contains("/// LinkML abstract class.\npub trait Animal"),
+            "an abstract parent's trait says it is abstract; got: {out}"
+        );
+        assert!(
             !ast::has_trait(&out, "Dog"),
             "a struct-role class is never a trait; got: {out}"
         );
@@ -4141,29 +4204,17 @@ mod tests {
     }
 
     #[test]
-    fn trait_class_without_descendants_omits_kind_enum_and_falls_back_to_string() {
-        // A trait-role class with NO concrete (Struct-role) descendants
-        // is a degenerate case that normally can't be produced by
-        // `compute_class_roles` (a class becomes trait-role only when
-        // something inherits from it). It CAN arise after schema edits
-        // that remove a leaf, or in synthetic / partially-loaded
-        // schemas. The writer must:
-        //   1. Skip the `<Name>Kind` enum (zero variants → invalid Rust).
-        //   2. Emit a breadcrumb comment explaining the absence.
-        //   3. Have `type_for_range` fall back to `String` rather than
-        //      emit a reference to the non-existent `<Name>Kind` type.
-        //
-        // Test setup: construct a `roles` map directly with a Trait
-        // marker that has no actual descendants in the schema.
+    fn a_trait_with_no_concrete_descendants_gets_an_empty_kind_enum() {
+        // No class implements the trait yet, so its closed enum has no
+        // variant: a slot ranging over it can hold no value, and a value
+        // in the data is refused rather than read as some other type.
         let mut schema = SchemaDefinition::new("s");
         schema
             .classes
             .insert("Phantom".to_string(), ClassDefinition::new("Phantom"));
-
         let mut roles = BTreeMap::new();
         roles.insert("Phantom".to_string(), ClassRole::Trait);
 
-        // Kind enum: skipped, breadcrumb emitted.
         let mut out = String::new();
         render_kind_enum(
             &mut out,
@@ -4174,19 +4225,32 @@ mod tests {
             &designators_by_class(&effective_slots_by_class(&schema)),
         )
         .unwrap();
-        assert!(
-            out.contains("no concrete descendants"),
-            "should emit breadcrumb explaining missing Kind enum; got: {out}"
+        assert_eq!(
+            ast::parse(&out).items.len(),
+            1,
+            "one item, the enum; got: {out}"
         );
         assert!(
-            !ast::has_enum(&out, "PhantomKind"),
-            "should NOT emit an empty PhantomKind enum; got: {out}"
+            out.contains("pub enum PhantomKind {}"),
+            "the enum has no variants; got: {out}"
+        );
+        assert_eq!(
+            ast::derives(&out, "PhantomKind"),
+            [
+                "Debug",
+                "Clone",
+                "PartialEq",
+                "Eq",
+                "Hash",
+                "Serialize",
+                "Deserialize"
+            ],
+            "got: {out}"
         );
 
-        // type_for_range: returns "String", not "PhantomKind".
         assert_eq!(
             type_for_range("Phantom", &chrono_ctx(&schema, &roles)),
-            "String"
+            "PhantomKind"
         );
     }
 
@@ -4561,12 +4625,6 @@ mod tests {
             !has_concrete_descendants("Phantom", &schema, &roles),
             "Unrelated is Struct-role but not a descendant of Phantom; \
              has_concrete_descendants must return false"
-        );
-
-        // And the corresponding `type_for_range` fallback still applies.
-        assert_eq!(
-            type_for_range("Phantom", &chrono_ctx(&schema, &roles)),
-            "String"
         );
     }
 

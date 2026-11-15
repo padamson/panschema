@@ -118,7 +118,10 @@ fn render_body(schema: &SchemaDefinition) -> String {
     writeln!(out, "-- Schema: {}", schema.name).ok();
     writeln!(out).ok();
 
-    for enum_name in referenced_enums(schema) {
+    let holders = roots_holding(schema);
+    let skips = compute_skips_with(schema, &holders);
+
+    for enum_name in referenced_enums(schema, &skips) {
         let def = &schema.enums[enum_name];
         let type_name = crate::casing::snake_case(enum_name);
         let values: Vec<String> = def
@@ -141,19 +144,12 @@ fn render_body(schema: &SchemaDefinition) -> String {
     // classes) never matter — the script still applies in one pass.
     let mut fk_constraints = Vec::new();
     let mut linking_tables: Vec<LinkingTable> = Vec::new();
-    let holders = roots_holding(schema);
-    let skips = compute_skips_with(schema, &holders);
 
     for (class_name, class) in &schema.classes {
-        if class.r#abstract {
-            // Not meant to be instantiated — nothing to hold a row.
-            continue;
-        }
-        if skips.contains_key(class_name) {
-            // Not projected (is_a, any_of, a key-named class with no single
-            // scope or a clashing name, or a dependency on a class with no
-            // table) — see `skipped_classes` for the diagnostic surfaced to
-            // the caller.
+        if !gets_table(class_name, class, &skips) {
+            // Skipped classes surface through `skipped_classes`; an abstract
+            // or mixin class is not a gap, and a mixin's columns land on each
+            // mixing class's table.
             continue;
         }
         let table = crate::casing::snake_case(class_name);
@@ -643,8 +639,8 @@ pub struct SkippedClass {
 ///   through a class-range slot or its scope column, however many steps
 ///   away.
 ///
-/// An abstract class isn't reported here — it's not a gap, it deliberately
-/// gets no table.
+/// An abstract or mixin class isn't reported here — it's not a gap, it
+/// deliberately gets no table.
 pub fn skipped_classes(schema: &SchemaDefinition) -> Vec<SkippedClass> {
     compute_skips(schema)
         .into_iter()
@@ -674,7 +670,7 @@ pub fn skipped_constraints(schema: &SchemaDefinition) -> Vec<SkippedConstraint> 
     let skips = compute_skips(schema);
     let mut out = Vec::new();
     for (class_name, class) in &schema.classes {
-        if class.r#abstract || skips.contains_key(class_name) {
+        if !gets_table(class_name, class, &skips) {
             continue;
         }
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
@@ -723,13 +719,13 @@ pub struct SkippedRule {
 /// doesn't have). Shares [`slot_column_map`] and [`rule_conditions_to_sql`]
 /// with `render`, so this reports exactly the rules `render` drops — no
 /// drift between the warning and the emitted DDL. Classes that get no table
-/// at all (abstract, or skipped per [`compute_skips`]) contribute no rule
+/// at all (abstract, mixin, or skipped per [`compute_skips`]) contribute no rule
 /// diagnostics — their omission is already covered by [`skipped_classes`].
 pub fn skipped_rules(schema: &SchemaDefinition) -> Vec<SkippedRule> {
     let skips = compute_skips(schema);
     let mut out = Vec::new();
     for (class_name, class) in &schema.classes {
-        if class.r#abstract || skips.contains_key(class_name) || class.rules.is_empty() {
+        if !gets_table(class_name, class, &skips) || class.rules.is_empty() {
             continue;
         }
         let slot_columns = slot_column_map(class, schema);
@@ -788,7 +784,7 @@ fn compute_skips_with(
 ) -> BTreeMap<String, String> {
     let mut skips = BTreeMap::new();
     for (name, class) in &schema.classes {
-        if class.r#abstract {
+        if class.is_abstract_or_mixin() {
             continue;
         }
         if class.is_a.is_some() {
@@ -824,7 +820,7 @@ fn compute_skips_with(
         let cascaded: Vec<(String, String)> = schema
             .classes
             .iter()
-            .filter(|(name, class)| !class.r#abstract && !skips.contains_key(*name))
+            .filter(|(name, class)| gets_table(name, class, &skips))
             .filter_map(|(name, class)| {
                 missing_table_dependency(name, class, schema, holders, &skips)
                     .map(|reason| (name.clone(), reason))
@@ -842,8 +838,15 @@ fn compute_skips_with(
     skips
 }
 
+/// Whether the script creates a table for `class`: it is neither declared
+/// to hold no records of its own (abstract or mixin) nor skipped per
+/// [`compute_skips`].
+fn gets_table(name: &str, class: &ClassDefinition, skips: &BTreeMap<String, String>) -> bool {
+    !class.is_abstract_or_mixin() && !skips.contains_key(name)
+}
+
 /// Why `class`'s table would reference a table that is never created —
-/// an abstract or skipped class, through a class-range slot or the scope
+/// an abstract, mixin, or skipped class, through a class-range slot or the scope
 /// column — or `None` when every table it references exists.
 fn missing_table_dependency(
     class_name: &str,
@@ -853,7 +856,17 @@ fn missing_table_dependency(
     skips: &BTreeMap<String, String>,
 ) -> Option<String> {
     let has_table = |name: &str| {
-        schema.classes.get(name).is_some_and(|c| !c.r#abstract) && !skips.contains_key(name)
+        schema
+            .classes
+            .get(name)
+            .is_some_and(|c| gets_table(name, c, skips))
+    };
+    // Why a class the schema declares has no table, as the clause that
+    // finishes "references class `X`, which ...".
+    let why_no_table = |name: &str| match schema.classes.get(name) {
+        Some(c) if c.mixin => "is a mixin class with no table of its own",
+        Some(c) if c.r#abstract => "is an abstract class with no table of its own",
+        _ => "is unsupported or itself skipped",
     };
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
     if let Some((slot_name, range)) = effective.iter().find_map(|(slot_name, slot)| {
@@ -863,12 +876,14 @@ fn missing_table_dependency(
             .map(|range| (slot_name, range))
     }) {
         return Some(format!(
-            "references class `{range}` (via slot `{slot_name}`), which is unsupported or itself skipped"
+            "references class `{range}` (via slot `{slot_name}`), which {}",
+            why_no_table(range)
         ));
     }
     match record_scope(class_name, class, schema, holders) {
         Some(RecordScope::Scoped { root, .. }) if !has_table(&root) => Some(format!(
-            "its records are scoped to root `{root}`, which is unsupported or itself skipped"
+            "its records are scoped to root `{root}`, which {}",
+            why_no_table(&root)
         )),
         _ => None,
     }
@@ -1096,11 +1111,16 @@ fn roots_holding(
     holders
 }
 
-/// Every table name the script could create: one per non-abstract class,
-/// and one per multivalued class-range slot's linking table.
+/// Every table name the script could create: one per class that is neither
+/// abstract nor a mixin, and one per multivalued class-range slot's linking
+/// table.
 fn relation_names(schema: &SchemaDefinition) -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
-    for (name, class) in schema.classes.iter().filter(|(_, c)| !c.r#abstract) {
+    for (name, class) in schema
+        .classes
+        .iter()
+        .filter(|(_, c)| !c.is_abstract_or_mixin())
+    {
         let table = crate::casing::snake_case(name);
         for (slot_name, slot) in crate::linkml_resolve::resolve_effective_slots(class, schema) {
             if is_multivalued(&slot) && is_class_range(&slot, schema) {
@@ -1121,12 +1141,18 @@ fn inlines(slot: &SlotDefinition, target: &ClassDefinition, schema: &SchemaDefin
     crate::linkml_resolve::is_inlined(slot, &effective)
 }
 
-/// Every enum referenced by an effective slot of any class, in name-sorted
-/// (deterministic) order — the set of `CREATE TYPE`s to emit before any
-/// table that references one.
-fn referenced_enums(schema: &SchemaDefinition) -> Vec<&str> {
+/// Every enum referenced by an effective slot of a class that gets a
+/// table, in name-sorted (deterministic) order — the set of `CREATE TYPE`s
+/// to emit before any table that references one.
+fn referenced_enums<'a>(
+    schema: &'a SchemaDefinition,
+    skips: &BTreeMap<String, String>,
+) -> Vec<&'a str> {
     let mut names = std::collections::BTreeSet::new();
-    for class in schema.classes.values() {
+    for (class_name, class) in &schema.classes {
+        if !gets_table(class_name, class, skips) {
+            continue;
+        }
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
         for slot in effective.values() {
             if let Some(range) = &slot.range
@@ -1541,6 +1567,14 @@ mod tests {
             .map(|l| l.trim().trim_end_matches(','))
             .find(|l| l.starts_with(&format!("\"{col}\" ")))
             .map(str::to_string)
+    }
+
+    /// The classes skipped, by name.
+    fn skipped_names(schema: &SchemaDefinition) -> Vec<String> {
+        skipped_classes(schema)
+            .into_iter()
+            .map(|s| s.class)
+            .collect()
     }
 
     /// The reason `class` is skipped, or empty when it is projected.
@@ -2154,11 +2188,69 @@ classes:
                 && deployment_table.contains("\"status\" text"),
             "expected the mixin's attribute flattened alongside the class's own; got:\n{out}"
         );
-        // The mixin, not being abstract, still gets its own table too.
+        // Listed in `mixins:` but not declared `mixin: true`, it is an
+        // ordinary class and keeps its own table.
         assert!(
             out.contains("CREATE TABLE \"auditable\" ("),
-            "a non-abstract mixin still gets its own table; got:\n{out}"
+            "an undeclared mixin still gets its own table; got:\n{out}"
         );
+    }
+
+    #[test]
+    fn a_declared_mixin_gets_no_table_and_its_columns_land_on_the_mixing_class() {
+        let schema = yaml_schema(
+            "name: s
+classes:
+  Stamped:
+    name: Stamped
+    mixin: true
+    attributes:
+      stamp: {name: stamp, range: integer}
+  Parcel:
+    name: Parcel
+    mixins: [Stamped]
+",
+        );
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CREATE TABLE \"stamped\""),
+            "a `mixin: true` class must not get a table; got:\n{out}"
+        );
+        assert_eq!(
+            column_line(&out, "parcel", "stamp").as_deref(),
+            Some("\"stamp\" integer"),
+            "the mixin's column lands on the mixing class's table; got:\n{out}"
+        );
+        assert_eq!(
+            skipped_classes(&schema),
+            vec![],
+            "a mixin with no table is not a gap to report"
+        );
+    }
+
+    #[test]
+    fn a_class_ranging_over_a_declared_mixin_is_skipped_with_a_diagnostic() {
+        let mut stamped = ClassDefinition::new("Stamped");
+        stamped.mixin = true;
+        let mut log = ClassDefinition::new("Docket");
+        let mut subject = SlotDefinition::new("subject");
+        subject.range = Some("Stamped".to_string());
+        log.attributes.insert("subject".to_string(), subject);
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Stamped".to_string(), stamped);
+        schema.classes.insert("Docket".to_string(), log);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CREATE TABLE \"docket\""),
+            "a foreign key to a table that is never created must not be emitted; got:\n{out}"
+        );
+        assert_eq!(skipped_names(&schema), ["Docket"]);
+        let reason = skip_reason(&schema, "Docket");
+        assert!(reason.contains("Stamped"), "got: {reason}");
     }
 
     #[test]
@@ -2636,47 +2728,46 @@ classes:
             !out.contains("CREATE TABLE \"deployment\""),
             "a class referencing a skipped class must itself be skipped, not emit a broken FK; got:\n{out}"
         );
-        let skipped = skipped_classes(&schema);
+        let reason = skip_reason(&schema, "Deployment");
         assert!(
-            skipped
-                .iter()
-                .any(|s| s.class == "Deployment" && s.reason.contains("Broken")),
-            "expected Deployment skipped for referencing Broken; got: {skipped:?}"
+            reason.contains("`Broken`") && reason.contains("itself skipped"),
+            "Broken is skipped, neither abstract nor a mixin; got: {reason}"
         );
     }
 
+    /// Sets one flag on a class.
+    type Declare = fn(&mut ClassDefinition);
+
+    /// Each way a class declares that it holds no records of its own.
+    const NO_RECORD_FLAGS: [(&str, Declare); 2] = [
+        ("abstract", |c| c.r#abstract = true),
+        ("mixin", |c| c.mixin = true),
+    ];
+
     #[test]
-    fn abstract_class_referencing_a_skipped_class_is_not_reported() {
-        // Abstract classes are deliberately excluded from `skipped_classes`
-        // (they get no table on purpose, which isn't a gap) — that must
-        // hold even when the abstract class's own slot references another
-        // class that IS a real gap (here, `Broken` uses `is_a`).
-        let mut broken = ClassDefinition::new("Broken");
-        broken.is_a = Some("Base".to_string());
+    fn a_class_with_no_records_referencing_a_skipped_class_is_not_reported() {
+        // A class that gets no table on purpose isn't a gap, even when its
+        // own slot references a class that is one (`Broken` uses `is_a`).
+        for (flag, declare) in NO_RECORD_FLAGS {
+            let mut broken = ClassDefinition::new("Broken");
+            broken.is_a = Some("Base".to_string());
+            let mut grouping = ClassDefinition::new("Grouping");
+            declare(&mut grouping);
+            let mut broken_ref = SlotDefinition::new("broken_ref");
+            broken_ref.range = Some("Broken".to_string());
+            grouping
+                .attributes
+                .insert("broken_ref".to_string(), broken_ref);
+            let mut schema = SchemaDefinition::new("s");
+            schema.classes.insert("Broken".to_string(), broken);
+            schema.classes.insert("Grouping".to_string(), grouping);
 
-        let mut abstract_class = ClassDefinition::new("AbstractThing");
-        abstract_class.r#abstract = true;
-        let mut broken_ref = SlotDefinition::new("broken_ref");
-        broken_ref.range = Some("Broken".to_string());
-        abstract_class
-            .attributes
-            .insert("broken_ref".to_string(), broken_ref);
-
-        let mut schema = SchemaDefinition::new("s");
-        schema.classes.insert("Broken".to_string(), broken);
-        schema
-            .classes
-            .insert("AbstractThing".to_string(), abstract_class);
-
-        let skipped = skipped_classes(&schema);
-        assert!(
-            !skipped.iter().any(|s| s.class == "AbstractThing"),
-            "an abstract class must never appear in skipped_classes, even if its own slot references a real gap; got: {skipped:?}"
-        );
-        assert!(
-            skipped.iter().any(|s| s.class == "Broken"),
-            "Broken must still be reported for its own is_a usage; got: {skipped:?}"
-        );
+            assert_eq!(
+                skipped_names(&schema),
+                ["Broken"],
+                "{flag}: only Broken is a gap"
+            );
+        }
     }
 
     /// A representative multi-class fixture combining every construct this
@@ -2751,6 +2842,135 @@ classes:
         }
 
         schema
+    }
+
+    #[test]
+    fn a_class_with_no_records_using_is_a_is_not_reported() {
+        for (flag, declare) in NO_RECORD_FLAGS {
+            let mut grouping = ClassDefinition::new("Grouping");
+            declare(&mut grouping);
+            grouping.is_a = Some("Base".to_string());
+            let mut schema = SchemaDefinition::new("s");
+            schema
+                .classes
+                .insert("Base".to_string(), ClassDefinition::new("Base"));
+            schema.classes.insert("Grouping".to_string(), grouping);
+
+            assert_eq!(skipped_classes(&schema), vec![], "{flag}");
+        }
+    }
+
+    #[test]
+    fn a_class_with_no_records_takes_no_table_name_from_a_record_key() {
+        // `StubRecordKey` would take the name of Stub's record-key index if
+        // it had a table; declared to hold no records, it has none.
+        for (flag, _) in NO_RECORD_FLAGS {
+            let schema = yaml_schema(&format!(
+                "name: s
+classes:
+  Stub:
+    name: Stub
+    attributes:
+      id: {{name: id, key: true}}
+  StubRecordKey:
+    name: StubRecordKey
+    {flag}: true
+    attributes:
+      label: {{name: label}}
+"
+            ));
+
+            assert_eq!(skip_reason(&schema, "Stub"), "", "{flag}");
+        }
+    }
+
+    #[test]
+    fn an_enum_only_a_class_with_no_table_references_gets_no_type() {
+        for (flag, _) in NO_RECORD_FLAGS {
+            let schema = yaml_schema(&format!(
+                "name: s
+enums:
+  Shade:
+    permissible_values:
+      dark: {{}}
+classes:
+  Grouping:
+    name: Grouping
+    {flag}: true
+    attributes:
+      shade: {{name: shade, range: Shade}}
+"
+            ));
+
+            let out = PostgresWriter::new().render(&schema);
+            assert!(!out.contains("CREATE TYPE"), "{flag}; got:\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_skip_for_a_class_with_no_table_says_which_kind_it_is() {
+        for (flag, kind) in [
+            ("abstract", "an abstract class"),
+            ("mixin", "a mixin class"),
+        ] {
+            let schema = yaml_schema(&format!(
+                "name: s
+classes:
+  Grouping:
+    name: Grouping
+    {flag}: true
+  Docket:
+    name: Docket
+    attributes:
+      subject: {{name: subject, range: Grouping}}
+"
+            ));
+
+            let reason = skip_reason(&schema, "Docket");
+            assert!(
+                reason.contains("`Grouping`") && reason.contains(kind),
+                "{flag}; got: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mixin_slot_ranging_over_a_mixin_skips_each_mixing_class() {
+        // The slot lands on the mixing class, where it would reference a
+        // table that is never created.
+        let schema = yaml_schema(
+            "name: s
+classes:
+  Nested:
+    name: Nested
+    mixin: true
+    attributes:
+      parent: {name: parent, range: Nested}
+  Folder:
+    name: Folder
+    mixins: [Nested]
+",
+        );
+
+        assert_eq!(skipped_names(&schema), ["Folder"]);
+        let out = PostgresWriter::new().render(&schema);
+        assert!(!out.contains("CREATE TABLE"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_class_with_no_records_contributes_no_constraint_diagnostics() {
+        for (flag, declare) in NO_RECORD_FLAGS {
+            let mut class = ClassDefinition::new("Grouping");
+            declare(&mut class);
+            let mut codes = SlotDefinition::new("codes");
+            codes.range = Some("string".to_string());
+            codes.multivalued = true;
+            codes.pattern = Some("^[A-Z]+$".to_string());
+            class.attributes.insert("codes".to_string(), codes);
+            let schema = schema_with_class(class);
+
+            assert_eq!(skipped_constraints(&schema), vec![], "{flag}");
+        }
     }
 
     #[test]
@@ -3339,35 +3559,33 @@ classes:
     }
 
     #[test]
-    fn an_abstract_class_contributes_no_rule_diagnostics() {
-        // An abstract class gets no table at all, so its rules are moot —
-        // `skipped_rules` must not report them (that omission is covered by
-        // the class getting no table, not a per-rule warning).
+    fn a_class_with_no_records_contributes_no_rule_diagnostics() {
+        // The class gets no table, so its rules are moot: a one-sided rule
+        // that would be reported on a table-backed class is not.
         use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
-        let mut class = ClassDefinition::new("AbstractThing");
-        class.r#abstract = true;
-        let mut status = SlotDefinition::new("status");
-        status.range = Some("string".to_string());
-        class.attributes.insert("status".to_string(), status);
-        let pre = SlotCondition {
-            equals_string: Some("actual".to_string()),
-            ..Default::default()
-        };
-        class.rules.push(ClassRule {
-            title: Some("moot".to_string()),
-            description: None,
-            preconditions: Some(RuleConditions {
-                any_of: Vec::new(),
-                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
-            }),
-            postconditions: None, // one-sided → would be "skipped" if it had a table
-        });
-        let schema = schema_with_class(class);
-        assert!(
-            skipped_rules(&schema).is_empty(),
-            "an abstract class's rules must not be reported; got: {:?}",
-            skipped_rules(&schema)
-        );
+        for (flag, declare) in NO_RECORD_FLAGS {
+            let mut class = ClassDefinition::new("Grouping");
+            declare(&mut class);
+            let mut status = SlotDefinition::new("status");
+            status.range = Some("string".to_string());
+            class.attributes.insert("status".to_string(), status);
+            let pre = SlotCondition {
+                equals_string: Some("actual".to_string()),
+                ..Default::default()
+            };
+            class.rules.push(ClassRule {
+                title: Some("moot".to_string()),
+                description: None,
+                preconditions: Some(RuleConditions {
+                    any_of: Vec::new(),
+                    slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+                }),
+                postconditions: None,
+            });
+            let schema = schema_with_class(class);
+
+            assert_eq!(skipped_rules(&schema), vec![], "{flag}");
+        }
     }
 
     #[test]

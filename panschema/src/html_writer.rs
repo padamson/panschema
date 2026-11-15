@@ -59,6 +59,10 @@ pub struct ClassData {
     /// a small badge in the card heading so readers can tell
     /// foundation classes from instantiable ones at a glance.
     pub is_abstract: bool,
+    /// `true` for LinkML classes with `mixin: true`. Surfaced as a badge
+    /// beside the title, so a reader sees which class supplies the slots
+    /// its mixing classes share.
+    pub is_mixin: bool,
     /// Deprecation note when the class is marked `deprecated:`. Drives a
     /// "Deprecated" badge in the heading plus the note text on the card;
     /// `None` renders nothing.
@@ -1252,6 +1256,7 @@ impl HtmlWriter {
                 mappings,
                 external_superclasses,
                 is_abstract: class_def.r#abstract,
+                is_mixin: class_def.mixin,
                 deprecated: class_def.deprecated.clone(),
                 aliases: class_def.aliases.clone(),
                 see_also: build_see_also(&class_def.see_also, schema, labels),
@@ -6379,6 +6384,26 @@ mod tests {
         let concrete_card = data.class_data.iter().find(|c| c.id == "Concrete").unwrap();
         assert!(foundation_card.is_abstract);
         assert!(!concrete_card.is_abstract);
+    }
+
+    #[test]
+    fn class_data_threads_is_mixin_from_class_definition() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        let mut stamped = ClassDefinition::new("Stamped");
+        stamped.mixin = true;
+        schema.classes.insert("Stamped".to_string(), stamped);
+        let mut parcel = ClassDefinition::new("Parcel");
+        parcel.mixins = vec!["Stamped".to_string()];
+        schema.classes.insert("Parcel".to_string(), parcel);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = |id: &str| data.class_data.iter().find(|c| c.id == id).unwrap();
+        assert!(card("Stamped").is_mixin);
+        assert!(
+            !card("Parcel").is_mixin,
+            "listing a mixin does not make a class one"
+        );
     }
 
     #[test]

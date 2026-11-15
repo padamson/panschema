@@ -2224,6 +2224,40 @@ enums:
     }
 
     #[test]
+    fn a_record_typed_as_an_abstract_or_mixin_class_is_checked_like_any_other() {
+        // linkml-validate enforces neither flag, so neither is a violation
+        // here; the class's own constraints still apply.
+        for flag in ["abstract", "mixin"] {
+            let schema: SchemaDefinition = serde_norway::from_str(&format!(
+                "name: s
+classes:
+  Shelf:
+    tree_root: true
+    attributes:
+      items: {{range: Grouping, multivalued: true, inlined_as_list: true}}
+  Grouping:
+    {flag}: true
+    attributes:
+      label: {{required: true}}
+"
+            ))
+            .expect("parse schema");
+            let conforming = validate_instance_data(&schema, &data("items:\n  - label: a\n"));
+            assert!(
+                conforming.is_empty(),
+                "{flag}; got: {:?}",
+                conforming.iter().map(Violation::detail).collect::<Vec<_>>()
+            );
+            let missing = validate_instance_data(&schema, &data("items:\n  - {}\n"));
+            assert_eq!(
+                missing.len(),
+                1,
+                "{flag}: the required slot is still checked"
+            );
+        }
+    }
+
+    #[test]
     fn numeric_values_exactly_on_the_bounds_conform() {
         // strength at exactly its minimum (0.0) and exactly its maximum (1.0)
         // both conform — pins the `<`/`>` boundaries.

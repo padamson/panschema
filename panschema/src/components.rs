@@ -259,6 +259,7 @@ pub struct ClassCardComponent<'a> {
     pub mappings: &'a [panschema::html_writer::Mapping],
     pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
+    pub is_mixin: bool,
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
@@ -358,6 +359,7 @@ pub struct SampleClass<'a> {
     pub mappings: &'a [panschema::html_writer::Mapping],
     pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
+    pub is_mixin: bool,
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
@@ -569,6 +571,7 @@ impl ComponentRenderer {
             mappings: &[],
             external_superclasses: &[],
             is_abstract: false,
+            is_mixin: false,
             deprecated: None,
             aliases: &[],
             see_also: &[],
@@ -789,6 +792,7 @@ impl ComponentRenderer {
             mappings: &class_mappings,
             external_superclasses: &[],
             is_abstract: false,
+            is_mixin: false,
             deprecated: None,
             aliases: &class_aliases,
             see_also: &class_see_also,
@@ -1011,6 +1015,7 @@ mod tests {
                 mappings: &[],
                 external_superclasses: &[],
                 is_abstract: true,
+                is_mixin: false,
                 deprecated: None,
                 aliases: &[],
                 see_also: &[],
@@ -1023,6 +1028,36 @@ mod tests {
                 html.contains(r#"<span class="abstract-badge""#),
                 "abstract badge should be present when is_abstract = true"
             );
+        }
+
+        #[test]
+        fn class_card_renders_mixin_badge() {
+            let card = |is_mixin| ClassCardComponent {
+                id: "stamped",
+                label: "Stamped",
+                iri: "https://example.org/ontology#Stamped",
+                iri_href: None,
+                description: None,
+                superclass: None,
+                subclasses: &[],
+                mixins: &[],
+                slots: &[],
+                mappings: &[],
+                external_superclasses: &[],
+                is_abstract: false,
+                is_mixin,
+                deprecated: None,
+                aliases: &[],
+                see_also: &[],
+                examples: &[],
+                rules: &[],
+                unique_keys: &[],
+            };
+            let badge = r#"<span class="mixin-badge""#;
+            let html = card(true).render().unwrap();
+            assert_eq!(html.matches(badge).count(), 1, "got:\n{html}");
+            let html = card(false).render().unwrap();
+            assert_eq!(html.matches(badge).count(), 0, "got:\n{html}");
         }
 
         #[test]
@@ -1043,6 +1078,7 @@ mod tests {
                 mappings: &[],
                 external_superclasses: &[],
                 is_abstract: false,
+                is_mixin: false,
                 deprecated: Some("use Person instead"),
                 aliases: &[],
                 see_also: &[],
@@ -1103,6 +1139,7 @@ mod tests {
                 mappings: &[],
                 external_superclasses: &[],
                 is_abstract: false,
+                is_mixin: false,
                 deprecated: None,
                 aliases: &aliases,
                 see_also: &see_also,
@@ -1175,6 +1212,7 @@ mod tests {
                 mappings: &[],
                 external_superclasses: &[],
                 is_abstract: false,
+                is_mixin: false,
                 deprecated: None,
                 aliases: &[],
                 see_also: &[],

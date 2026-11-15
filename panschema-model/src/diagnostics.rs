@@ -3695,6 +3695,12 @@ classes:
     }
 
     #[test]
+    fn a_mixin_flag_is_modeled_and_draws_no_warning() {
+        let schema = parse("name: s\nclasses:\n  Stamped:\n    mixin: true\n");
+        assert_eq!(unmodeled_class_constructs(&schema), vec![]);
+    }
+
+    #[test]
     fn schema_load_diagnostics_reports_unmodeled_and_unresolved_unique_keys() {
         // The shared load path collects the format-independent schema
         // diagnostics — an unmodeled construct and a `unique_key` naming a slot

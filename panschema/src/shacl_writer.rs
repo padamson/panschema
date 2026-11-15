@@ -449,6 +449,28 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_mixin_keeps_its_node_shape() {
+        // gen-shacl gives a mixin a shape, and the OWL output makes each
+        // mixing class a subclass of it, so with the ontology merged into
+        // the data the shape targets every mixing record.
+        let mut schema = schema_with_constrained_class();
+        let mut stamped = ClassDefinition::new("Stamped");
+        stamped.class_uri = Some(format!("{EX}#Stamped"));
+        stamped.mixin = true;
+        schema.classes.insert("Stamped".to_string(), stamped);
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ <{EX}#StampedShape> a <{SH}NodeShape> ; <{SH}targetClass> <{EX}#Stamped> }}"
+                )
+            ),
+            "expected a NodeShape targeting Stamped"
+        );
+    }
+
+    #[test]
     fn every_class_gets_a_node_shape_targeting_its_iri() {
         let store = render_to_store(&schema_with_constrained_class());
         for name in ["Provider", "Deployment"] {

@@ -477,6 +477,36 @@ classes:
         range: Shelf
         multivalued: true
 
+  # A mixin no class lists yet and an abstract class nothing inherits from:
+  # each is a trait, and a slot ranging over one takes its closed enum,
+  # which has no variant until a class implements the trait.
+  Pending:
+    name: Pending
+    description: A slot bundle no class takes on yet.
+    mixin: true
+    attributes:
+      note:
+        name: note
+        description: A remark.
+        range: string
+  Archetype:
+    name: Archetype
+    description: A grouping nothing inherits from yet.
+    abstract: true
+  Holder:
+    name: Holder
+    description: Slots ranging over traits nothing implements.
+    attributes:
+      pending:
+        name: pending
+        description: Nothing can fill this yet.
+        range: Pending
+      archetypes:
+        name: archetypes
+        description: Nor these.
+        range: Archetype
+        multivalued: true
+
 slots:
   label:
     name: label

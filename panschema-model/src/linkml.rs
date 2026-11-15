@@ -699,6 +699,11 @@ pub struct ClassDefinition {
     /// Whether this class is abstract (cannot be instantiated directly)
     #[serde(default, skip_serializing_if = "is_false")]
     pub r#abstract: bool,
+    /// Whether this class is a mixin: a bundle of slots other classes take
+    /// on by listing it in `mixins:`, rather than a class with records of
+    /// its own.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mixin: bool,
     /// Whether this class is the data-tree root — the container that a
     /// conforming instance-data file is a single instance of. The instance
     /// reader uses it as the entry point into an A-box, and the JSON-Schema
@@ -780,6 +785,7 @@ impl ClassDefinition {
             mixins: Vec::new(),
             unmodeled: BTreeMap::new(),
             r#abstract: false,
+            mixin: false,
             tree_root: false,
             slots: Vec::new(),
             attributes: BTreeMap::new(),
@@ -795,6 +801,14 @@ impl ClassDefinition {
             rules: Vec::new(),
             unique_keys: BTreeMap::new(),
         }
+    }
+
+    /// Whether the class is declared to hold no records of its own:
+    /// `abstract`, or a `mixin` whose slots other classes take on. A
+    /// projection with one container per record class (a table) gives
+    /// such a class none.
+    pub fn is_abstract_or_mixin(&self) -> bool {
+        self.r#abstract || self.mixin
     }
 
     /// The class's display label: its `panschema:label` annotation, or
@@ -1449,6 +1463,18 @@ imports:
         assert!(class.is_a.is_none());
         assert!(class.mixins.is_empty());
         assert!(!class.r#abstract);
+    }
+
+    #[test]
+    fn abstract_and_mixin_classes_hold_no_records_of_their_own() {
+        let parse = |yaml: &str| serde_norway::from_str::<ClassDefinition>(yaml).unwrap();
+        for (yaml, holds_none) in [
+            ("name: Stamped\nmixin: true", true),
+            ("name: Entity\nabstract: true", true),
+            ("name: Parcel", false),
+        ] {
+            assert_eq!(parse(yaml).is_abstract_or_mixin(), holds_none, "{yaml}");
+        }
     }
 
     #[test]
