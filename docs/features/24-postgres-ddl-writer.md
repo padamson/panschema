@@ -330,6 +330,10 @@ yield a child-side foreign key for either consumer. One shape serves both.
 
 **Decision: a linking table for every multivalued class-range slot.**
 
+*Revisited in slice 9:* a collection that declares it owns its records
+(`inlined` or `inlined_as_list`) onto an identified class now gives the
+part a holder column instead, the trigger this reasoning named.
+
 The two failure modes are not symmetric, and that is what settles it. A
 linking table where the domain wanted one-to-many is a *missing
 constraint* — the data is all representable, and tightening it later is a
@@ -468,6 +472,73 @@ with the same key: valid data the instance model and `verify` accept.
 
 ---
 
+### Slice 9: Composed parts carry their holder's key
+
+**Status:** Complete
+
+**Priority:** Should Have. A schema that gives every record class an
+identifier and declares which collections own their records gets a
+linking table for each owned collection, so nothing stops one part being
+listed under two holders, and a part cannot be found from its own row.
+A service that authorizes by holder needs the holder on the part's row.
+
+#### Design pass (2026-11-15)
+
+Slice 5 chose a linking table for every multivalued class-range slot,
+because neither consumer schema of the day declared `inlined` or
+`inlined_as_list`, so ownership was undeclared and the shape that permits
+more was the safer default. That reasoning named its own trigger: a
+schema that declares ownership. A consumer now declares
+`inlined_as_list: true` on every collection that owns its records, and
+gives every one of those records an identifier.
+
+`conformance/probe_identifier_columns.py` asks `gen-sqlddl` what it does
+with that shape. A part an identified holder owns through an
+`inlined_as_list` slot gets a column naming its holder (`Part."Holder_id"`,
+a foreign key to the holder's primary key) and no linking table; a
+multivalued slot that is not inlined keeps a linking table. That is also
+how a Postgres author writes one-to-many: the foreign key sits on the
+child.
+
+**Decision.** A multivalued slot that declares `inlined` or
+`inlined_as_list` onto a class with an identifier gives the range class's
+table a holder column instead of a linking table. A part names its direct
+holder, not the root: a recipe's steps carry `recipe_id`, and the recipe
+carries `household_id`. A root's id on every table a root reaches is not
+in LinkML, and it leaves the writer to choose a root when a part is
+reachable from two.
+
+**Acceptance Criteria:**
+- [x] A multivalued slot declaring `inlined: true` or `inlined_as_list: true` whose range class has an identifier gives the range class's table a column `<holder table>_<holder key column>`, typed as the holder's key, with a foreign key to the holder's table. No linking table is emitted for the slot (`an_owned_collection_puts_its_holders_key_on_each_part`).
+- [x] The holder column is `NOT NULL` when exactly one slot on one class owns the part, the part is not a `tree_root`, no other slot contains it, and no chain of owning slots leads from the part back to itself. Otherwise each holder column is NULL-able, one per owning class, and with several a `CHECK (num_nonnulls(...) <= 1)` keeps a record under one owner at a time (`a_holder_column_is_nullable_when_the_part_need_not_have_that_holder`).
+- [x] A multivalued slot onto an identified class that declares neither flag is a reference and keeps its linking table, and a class with no identifier or only a `key` projects as before, slices 5 and 8 (`an_owned_collection_puts_its_holders_key_on_each_part`, and the slice 5 and 8 tests unchanged).
+- [x] An owning collection whose records' table cannot hold the column keeps its linking table, and a warning names the slot and the cause: one class owns the records through two or more slots, so one column cannot say which; two owners would name one column; or the records' table already uses the name for a column or a foreign key (`an_owning_collection_its_part_cannot_name_keeps_a_linking_table`).
+- [x] Ownership never removes a table: an owner with no table names no column, and its part keeps its table (`an_owning_collection_its_part_cannot_name_keeps_a_linking_table`).
+- [x] The emitted DDL for a schema with a root owning parts that own parts, and a part owned by two classes, applies cleanly to a real Postgres database (`whole_script_fixture_schema`, applied by `postgres_apply_applies_generated_ddl_to_a_real_database`).
+- [x] The coverage doc's `multivalued` row says which collections take a holder column instead of a linking table.
+
+**Notes:**
+- *Not here*: scoping a `unique_keys` entry to its holder
+  (`UNIQUE (<holder column>, ...)`), which LinkML's definition of a
+  unique key ("within a given container") calls for. It needs this
+  slice's column and is the next slice.
+- *Not here*: `ON DELETE CASCADE` on the holder's foreign key. Neither
+  `gen-sqlddl` nor this writer's other foreign keys cascade, and a cascade
+  deletes data, so it waits for a consumer that asks.
+- *Not here*: an inferred inlining (a range with no identifier, or only a
+  `key`) keeps the linking table and slice 8's scope column. `gen-sqlddl`
+  puts a holder column there too; moving it changes slice 8's shape and
+  is its own decision.
+- A part owned by several classes gets several NULL-able holder columns
+  and a `CHECK` that at most one is set, since a record sits in one place.
+  Not exactly one: a part that is a `tree_root`, or that another slot
+  contains, may have no owner at all.
+- A collection on a root that does not declare inlining holds references,
+  as LinkML reads it (and `verify` reports inline records there), so it
+  does not make a part's owner column NULL-able.
+
+---
+
 ## Migrating with the generated DDL
 
 This writer answers "what should the schema look like right now" — it is
@@ -512,6 +583,7 @@ computing the delta.
 | Slice 6: `is_a` inheritance strategy | Could Have | Slice 1 | Not Started |
 | Slice 7: `any_of` polymorphic ranges | Won't Have | Slice 1 | 📋 Deferred |
 | Slice 8: key-scoped classes | Should Have | Slice 1, 5 | Complete |
+| Slice 9: composed parts carry their holder's key | Should Have | Slice 5, 8 | Complete |
 
 ---
 

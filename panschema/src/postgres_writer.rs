@@ -83,6 +83,12 @@ impl Writer for PostgresWriter {
                 s.slot, s.class, s.reason
             )
         }));
+        gaps.extend(linked_owning_collections(schema).into_iter().map(|l| {
+            format!(
+                "slot `{}` of class `{}` owns its records but keeps a linking table: {}",
+                l.slot, l.class, l.reason
+            )
+        }));
         gaps.extend(crate::diagnostics::slot_specialization_gaps(
             schema, "postgres",
         ));
@@ -120,6 +126,7 @@ fn render_body(schema: &SchemaDefinition) -> String {
 
     let holders = roots_holding(schema);
     let skips = compute_skips_with(schema, &holders);
+    let ownership = ownership(schema, &skips);
 
     for enum_name in referenced_enums(schema, &skips) {
         let def = &schema.enums[enum_name];
@@ -169,25 +176,30 @@ fn render_body(schema: &SchemaDefinition) -> String {
             key.sql_type,
         )];
         let scope = record_scope(class_name, class, schema, &holders);
-        if let Some(RecordScope::Scoped {
-            col,
-            sql_type,
-            root_table,
-            root_col,
-            nullable,
-            ..
-        }) = &scope
-        {
+        let scope_column = match &scope {
+            Some(RecordScope::Scoped { root, nullable, .. }) => Some(KeyColumn {
+                key: KeyReference::of(root, schema),
+                nullable: *nullable,
+            }),
+            _ => None,
+        };
+        let owner_columns = ownership
+            .columns
+            .get(class_name)
+            .map_or(&[][..], Vec::as_slice);
+        for added in scope_column.iter().chain(owner_columns) {
+            let col = &added.key.col;
             lines.push(format!(
-                "    {} {sql_type}{}",
+                "    {} {}{}",
                 quote_ident(col),
-                if *nullable { "" } else { " NOT NULL" }
+                added.key.key.sql_type,
+                if added.nullable { "" } else { " NOT NULL" }
             ));
             fk_constraints.push(FkConstraint {
                 from_table: table.clone(),
                 from_col: col.clone(),
-                to_table: root_table.clone(),
-                to_col: root_col.clone(),
+                to_table: added.key.table.clone(),
+                to_col: added.key.key.col.clone(),
                 constraint_name: format!("{table}_{col}_fkey"),
             });
         }
@@ -201,10 +213,13 @@ fn render_body(schema: &SchemaDefinition) -> String {
             if pk_slot == Some(slot_name.as_str()) {
                 continue;
             }
-            // A multivalued class range has no column here; it becomes its
-            // own table, emitted once every class table exists.
-            if let Some(link) = linking_table_for(class_name, class, slot_name, slot, schema) {
-                linking_tables.push(link);
+            // A multivalued class range has no column here: it becomes its
+            // own table, emitted once every class table exists, or, when the
+            // collection owns its records, a holder column on each part.
+            if is_multivalued(slot) && is_class_range(slot, schema) {
+                if !ownership.places(class_name, slot_name) {
+                    linking_tables.push(linking_table_for(class_name, slot_name, slot, schema));
+                }
                 continue;
             }
             let col = &slot_columns[slot_name];
@@ -264,6 +279,19 @@ fn render_body(schema: &SchemaDefinition) -> String {
                 quote_ident(key_col)
             )),
             Some(RecordScope::Ambiguous(_)) | None => {}
+        }
+        // A record has one owner, so of several owner columns at most one
+        // is set.
+        if let [_, _, ..] = owner_columns {
+            let cols: Vec<String> = owner_columns
+                .iter()
+                .map(|h| quote_ident(&h.key.col))
+                .collect();
+            lines.push(format!(
+                "    CONSTRAINT {} CHECK (num_nonnulls({}) <= 1)",
+                quote_ident(&format!("{table}_one_owner")),
+                cols.join(", ")
+            ));
         }
         // Table-level UNIQUE constraints from `unique_keys`. A key that
         // names a slot the class doesn't have is dropped entirely rather
@@ -492,9 +520,10 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
 /// A many-to-many table standing for one multivalued class-range slot.
 ///
 /// Both sides are `NOT NULL` and together form the primary key, so a
-/// target cannot be listed twice under the same slot. See feature 24 slice
-/// 5 for why every such slot gets one, rather than a foreign key on the
-/// child when the relationship looks like ownership.
+/// target cannot be listed twice under the same slot. Every such slot gets
+/// one but a collection that owns its records ([`owns_records`]), whose
+/// records' table names the owner itself, so a relationship whose
+/// ownership is undeclared stays storable either way.
 struct LinkingTable {
     name: String,
     owner_col: String,
@@ -507,37 +536,31 @@ struct LinkingTable {
     target_pk: String,
 }
 
-/// The linking table for `slot_name` on `class`, or `None` when the slot
-/// isn't a multivalued class range.
+/// The linking table for the multivalued class-range slot `slot_name` on
+/// `class_name`.
 fn linking_table_for(
     class_name: &str,
-    class: &ClassDefinition,
     slot_name: &str,
     slot: &SlotDefinition,
     schema: &SchemaDefinition,
-) -> Option<LinkingTable> {
-    if !is_multivalued(slot) {
-        return None;
-    }
-    let target_def = slot.range.as_deref().and_then(|r| schema.classes.get(r))?;
-    let owner_table = crate::casing::snake_case(class_name);
-    let target_table = crate::casing::snake_case(slot.range.as_deref()?);
-    let owner_key = class_primary_key(class, schema);
-    let target_key = class_primary_key(target_def, schema);
+) -> LinkingTable {
+    let range = slot.range.as_deref().unwrap_or_default();
+    let owner = KeyReference::of(class_name, schema);
+    let target_key = class_primary_key(&schema.classes[range], schema);
     let slot_col = crate::casing::snake_case(slot_name);
-    Some(LinkingTable {
+    LinkingTable {
         // Named for the slot rather than the target class, so two slots
         // onto one class stay two distinct relationships.
-        name: format!("{owner_table}_{slot_col}"),
-        owner_col: format!("{owner_table}_{}", owner_key.col),
-        owner_type: owner_key.sql_type,
-        owner_table,
-        owner_pk: owner_key.col,
+        name: format!("{}_{slot_col}", owner.table),
+        owner_col: owner.col,
+        owner_type: owner.key.sql_type,
+        owner_table: owner.table,
+        owner_pk: owner.key.col,
         target_col: format!("{slot_col}_{}", target_key.col),
         target_type: target_key.sql_type,
-        target_table,
+        target_table: crate::casing::snake_case(range),
         target_pk: target_key.col,
-    })
+    }
 }
 
 /// Map a rule's `slot_conditions` to a SQL boolean expression — the `AND`
@@ -873,6 +896,14 @@ fn gets_table(name: &str, class: &ClassDefinition, skips: &BTreeMap<String, Stri
     !class.is_abstract_or_mixin() && !skips.contains_key(name)
 }
 
+/// Whether the script creates a table for the class named `name`.
+fn has_table(schema: &SchemaDefinition, skips: &BTreeMap<String, String>, name: &str) -> bool {
+    schema
+        .classes
+        .get(name)
+        .is_some_and(|c| gets_table(name, c, skips))
+}
+
 /// Why `class`'s table would reference a table that is never created —
 /// an abstract, mixin, or skipped class, through a class-range slot or the scope
 /// column — or `None` when every table it references exists.
@@ -883,12 +914,7 @@ fn missing_table_dependency(
     holders: &BTreeMap<String, std::collections::BTreeSet<String>>,
     skips: &BTreeMap<String, String>,
 ) -> Option<String> {
-    let has_table = |name: &str| {
-        schema
-            .classes
-            .get(name)
-            .is_some_and(|c| gets_table(name, c, skips))
-    };
+    let has_table = |name: &str| has_table(schema, skips, name);
     // Why a class the schema declares has no table, as the clause that
     // finishes "references class `X`, which ...".
     let why_no_table = |name: &str| match schema.classes.get(name) {
@@ -967,9 +993,6 @@ enum RecordScope {
         key_col: String,
         root: String,
         col: String,
-        sql_type: String,
-        root_table: String,
-        root_col: String,
         nullable: bool,
     },
     /// More than one identifier-named root holds the class.
@@ -1006,15 +1029,11 @@ fn record_scope(
     Some(match scoping.as_slice() {
         [] => RecordScope::Unscoped { key_col },
         [root] => {
-            let root_key = class_primary_key(&schema.classes[root.as_str()], schema);
-            let root_table = crate::casing::snake_case(root);
+            let scope = KeyReference::of(root, schema);
             RecordScope::Scoped {
                 key_col,
                 root: (*root).clone(),
-                col: format!("{root_table}_{}", root_key.col),
-                sql_type: root_key.sql_type,
-                root_table,
-                root_col: root_key.col,
+                col: scope.col,
                 nullable: !shared.is_empty(),
             }
         }
@@ -1035,14 +1054,10 @@ fn record_scope_conflict(
 ) -> Option<String> {
     let taken = match record_scope(class_name, class, schema, holders)? {
         RecordScope::Ambiguous(roots) => {
-            let roots = roots
-                .iter()
-                .map(|r| format!("`{r}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
             return Some(format!(
                 "its key is unique within the root holding its records, and more than one root \
-                 with an identifier holds them ({roots}), so the scope is ambiguous"
+                 with an identifier holds them ({}), so the scope is ambiguous",
+                backticked(&roots)
             ));
         }
         RecordScope::Scoped { col, .. } => vec![KEYED_SURROGATE.to_string(), col],
@@ -1081,20 +1096,13 @@ fn record_scope_conflict(
              record key"
         ));
     }
-    let scope_fkey = taken.get(1).map(|scope| format!("{table}_{scope}_fkey"))?;
-    crate::linkml_resolve::resolve_effective_slots(class, schema)
-        .into_iter()
-        .find(|(slot_name, slot)| {
-            !is_multivalued(slot)
-                && is_class_range(slot, schema)
-                && format!("{table}_{}_fkey", crate::casing::snake_case(slot_name)) == scope_fkey
-        })
-        .map(|(slot_name, _)| {
-            format!(
-                "slot `{slot_name}`'s foreign key would be named `{scope_fkey}`, which this \
-                 writer uses for the scope column's"
-            )
-        })
+    let scope = taken.get(1)?;
+    class_range_slot_named(class, scope, schema).map(|slot_name| {
+        format!(
+            "slot `{slot_name}`'s foreign key would be named `{table}_{scope}_fkey`, which this \
+             writer uses for the scope column's"
+        )
+    })
 }
 
 /// Every class mapped to the `tree_root` classes that hold its records: the
@@ -1141,7 +1149,8 @@ fn roots_holding(
 
 /// Every table name the script could create: one per class that is neither
 /// abstract nor a mixin, and one per multivalued class-range slot's linking
-/// table.
+/// table. An owning collection is counted too, since whether it keeps its
+/// linking table is settled only after the skips this feeds.
 fn relation_names(schema: &SchemaDefinition) -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
     for (name, class) in schema
@@ -1158,6 +1167,270 @@ fn relation_names(schema: &SchemaDefinition) -> std::collections::BTreeSet<Strin
         names.insert(table);
     }
     names
+}
+
+/// Whether `slot`, which inlines its records of `target`, is a collection
+/// that owns them: multivalued, onto a class whose identifier keys its
+/// table. For such a class, inlining means the slot declared `inlined` or
+/// `inlined_as_list`. `gen-sqlddl` gives each such record a column naming
+/// its owner rather than a linking table
+/// (`conformance/probe_identifier_columns.py`).
+fn owns_records(
+    slot: &SlotDefinition,
+    target: &ClassDefinition,
+    schema: &SchemaDefinition,
+) -> bool {
+    is_multivalued(slot) && class_primary_key(target, schema).slot.is_some()
+}
+
+/// A column naming a row of another class's table, with its foreign key:
+/// a key-named class's scope column, or a part's column naming an owner.
+struct KeyColumn {
+    key: KeyReference,
+    nullable: bool,
+}
+
+/// An owning collection that keeps a linking table, because its records'
+/// table cannot hold a column naming their owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedCollection {
+    pub class: String,
+    pub slot: String,
+    pub reason: String,
+}
+
+/// How the owning collections of the classes that get a table project:
+/// each placed one as a column on its part's table naming the owner, the
+/// rest as linking tables, with why. Read after the skips are settled, so
+/// ownership never removes a table.
+#[derive(Default)]
+struct Ownership {
+    /// Part class → the columns naming its owners, in owner name order.
+    columns: BTreeMap<String, Vec<KeyColumn>>,
+    /// Owning class → the slots such a column stands for.
+    placed: BTreeMap<String, std::collections::BTreeSet<String>>,
+    linked: Vec<LinkedCollection>,
+}
+
+impl Ownership {
+    fn places(&self, class_name: &str, slot_name: &str) -> bool {
+        self.placed
+            .get(class_name)
+            .is_some_and(|slots| slots.contains(slot_name))
+    }
+}
+
+/// One slot of a class with a table that contains records of another.
+struct Container {
+    class: String,
+    slot: String,
+    owns: bool,
+}
+
+/// Every class with a table mapped to the slots, on classes with tables,
+/// that contain its records by the model's inlining rule, each marked
+/// when it is an owning collection ([`owns_records`]).
+fn containers(
+    schema: &SchemaDefinition,
+    skips: &BTreeMap<String, String>,
+) -> BTreeMap<String, Vec<Container>> {
+    let mut containers: BTreeMap<String, Vec<Container>> = BTreeMap::new();
+    for (name, class) in schema
+        .classes
+        .iter()
+        .filter(|(n, _)| has_table(schema, skips, n))
+    {
+        for (slot_name, slot) in crate::linkml_resolve::resolve_effective_slots(class, schema) {
+            let Some((part, target)) = slot
+                .range
+                .as_deref()
+                .and_then(|r| schema.classes.get_key_value(r))
+            else {
+                continue;
+            };
+            if inlines(&slot, target, schema) {
+                containers.entry(part.clone()).or_default().push(Container {
+                    class: name.clone(),
+                    owns: owns_records(&slot, target, schema),
+                    slot: slot_name,
+                });
+            }
+        }
+    }
+    containers
+}
+
+fn ownership(schema: &SchemaDefinition, skips: &BTreeMap<String, String>) -> Ownership {
+    let containers = containers(schema, skips);
+    let mut ownership = Ownership::default();
+    for (part, holding) in &containers {
+        let owners: Vec<&Container> = holding.iter().filter(|c| c.owns).collect();
+        if owners.is_empty() {
+            continue;
+        }
+        let mut keys: BTreeMap<&str, KeyReference> = owners
+            .iter()
+            .map(|o| (o.class.as_str(), KeyReference::of(&o.class, schema)))
+            .collect();
+        let part_columns = slot_column_map(&schema.classes[part.as_str()], schema);
+        let (kept, refused): (Vec<_>, Vec<_>) = owners
+            .iter()
+            .map(|owner| {
+                let reason =
+                    holder_column_conflict(part, owner, &owners, &keys, &part_columns, schema);
+                (*owner, reason)
+            })
+            .partition(|(_, reason)| reason.is_none());
+        ownership
+            .linked
+            .extend(refused.into_iter().map(|(owner, reason)| LinkedCollection {
+                class: owner.class.clone(),
+                slot: owner.slot.clone(),
+                reason: reason.unwrap_or_default(),
+            }));
+        // Held only by this one slot: no other slot, owning or not, can
+        // hold the record, and no chain of containing slots leads back.
+        let nullable = holding.len() > 1
+            || schema.classes[part.as_str()].tree_root
+            || contains_itself(part, &containers);
+        let columns: Vec<KeyColumn> = kept
+            .into_iter()
+            .filter_map(|(owner, _)| {
+                ownership
+                    .placed
+                    .entry(owner.class.clone())
+                    .or_default()
+                    .insert(owner.slot.clone());
+                // A kept owner holds the part through one slot, so its key
+                // is taken once.
+                let key = keys.remove(owner.class.as_str())?;
+                Some(KeyColumn { key, nullable })
+            })
+            .collect();
+        if !columns.is_empty() {
+            ownership.columns.insert(part.clone(), columns);
+        }
+    }
+    ownership
+}
+
+/// Owning collections that keep a linking table, with why: their class
+/// owns the records through more than one slot, two owners would name the
+/// same column, or the records' table already uses the column's name for
+/// a column or a foreign key.
+pub fn linked_owning_collections(schema: &SchemaDefinition) -> Vec<LinkedCollection> {
+    ownership(schema, &compute_skips(schema)).linked
+}
+
+/// Why `part`'s table cannot hold a column naming `owner`'s class, among
+/// all of `part`'s `owners`, whose keys are `keys`; `part_columns` are
+/// the part's own columns.
+fn holder_column_conflict(
+    part: &str,
+    owner: &Container,
+    owners: &[&Container],
+    keys: &BTreeMap<&str, KeyReference>,
+    part_columns: &BTreeMap<String, String>,
+    schema: &SchemaDefinition,
+) -> Option<String> {
+    let slots: Vec<&str> = owners
+        .iter()
+        .filter(|o| o.class == owner.class)
+        .map(|o| o.slot.as_str())
+        .collect();
+    if slots.len() > 1 {
+        return Some(format!(
+            "class `{}` owns `{part}` through more than one slot ({}), and one column naming \
+             the owner cannot say which",
+            owner.class,
+            backticked(&slots)
+        ));
+    }
+    let col = &keys[owner.class.as_str()].col;
+    let sharing: Vec<&str> = keys
+        .iter()
+        .filter(|(_, key)| key.col == *col)
+        .map(|(class, _)| *class)
+        .collect();
+    if sharing.len() > 1 {
+        return Some(format!(
+            "owners {} of `{part}` would each name the column `{col}`",
+            backticked(&sharing)
+        ));
+    }
+    if let Some(slot) = part_columns.iter().find(|(_, c)| *c == col).map(|(s, _)| s) {
+        return Some(format!(
+            "`{part}`'s slot `{slot}` already becomes column `{col}`"
+        ));
+    }
+    class_range_slot_named(&schema.classes[part], col, schema).map(|slot| {
+        format!(
+            "`{part}`'s slot `{slot}` already has a foreign key named `{}_{col}_fkey`",
+            crate::casing::snake_case(part)
+        )
+    })
+}
+
+/// The single-valued class-range slot of `class` named `col` in snake
+/// case, whose foreign key is therefore named `<table>_<col>_fkey`, the
+/// name a scope or owner column `col` would give its own.
+fn class_range_slot_named(
+    class: &ClassDefinition,
+    col: &str,
+    schema: &SchemaDefinition,
+) -> Option<String> {
+    crate::linkml_resolve::resolve_effective_slots(class, schema)
+        .into_iter()
+        .find(|(name, slot)| {
+            !is_multivalued(slot)
+                && is_class_range(slot, schema)
+                && crate::casing::snake_case(name) == col
+        })
+        .map(|(name, _)| name)
+}
+
+/// `names` in backticks, comma-separated, as a diagnostic lists them.
+fn backticked<S: AsRef<str>>(names: &[S]) -> String {
+    names
+        .iter()
+        .map(|n| format!("`{}`", n.as_ref()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether a chain of containing slots leads from `part` back to itself.
+fn contains_itself(part: &str, containers: &BTreeMap<String, Vec<Container>>) -> bool {
+    let mut queue = vec![part];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(held) = queue.pop() {
+        if !seen.insert(held) {
+            continue;
+        }
+        for container in containers.get(held).into_iter().flatten() {
+            if container.class == part {
+                return true;
+            }
+            queue.push(&container.class);
+        }
+    }
+    false
+}
+
+/// A column on one table naming a row of `class`'s: the class's table,
+/// its key, and the column `<table>_<key column>`.
+struct KeyReference {
+    table: String,
+    key: TableKey,
+    col: String,
+}
+
+impl KeyReference {
+    fn of(class_name: &str, schema: &SchemaDefinition) -> Self {
+        let table = crate::casing::snake_case(class_name);
+        let key = class_primary_key(&schema.classes[class_name], schema);
+        let col = format!("{table}_{}", key.col);
+        Self { table, key, col }
+    }
 }
 
 /// Whether a class-range slot contains its value rather than referencing
@@ -2730,6 +3003,304 @@ classes:
         );
     }
 
+    /// A class named by an `id` identifier.
+    fn identified(name: &str) -> ClassDefinition {
+        let mut class = ClassDefinition::new(name);
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        class.attributes.insert("id".to_string(), id);
+        class
+    }
+
+    fn ranged(name: &str, range: &str) -> SlotDefinition {
+        let mut slot = SlotDefinition::new(name);
+        slot.range = Some(range.to_string());
+        slot
+    }
+
+    /// A multivalued slot onto `range` that owns its records when `owns`.
+    fn collection(name: &str, range: &str, owns: bool) -> SlotDefinition {
+        let mut slot = ranged(name, range);
+        slot.multivalued = true;
+        slot.inlined_as_list = owns.then_some(true);
+        slot
+    }
+
+    fn with_slots(mut class: ClassDefinition, slots: Vec<SlotDefinition>) -> ClassDefinition {
+        for slot in slots {
+            class.attributes.insert(slot.name.clone(), slot);
+        }
+        class
+    }
+
+    fn schema_of(classes: Vec<ClassDefinition>) -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("s");
+        for class in classes {
+            schema.classes.insert(class.name.clone(), class);
+        }
+        schema
+    }
+
+    /// The column definitions of `table`, without their trailing commas.
+    fn columns_of<'a>(out: &'a str, table: &str) -> Vec<&'a str> {
+        out.split(&format!("CREATE TABLE \"{table}\" (\n"))
+            .nth(1)
+            .and_then(|rest| rest.split("\n);").next())
+            .map(|body| {
+                body.lines()
+                    .map(|l| l.trim().trim_end_matches(','))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn an_owned_collection_puts_its_holders_key_on_each_part() {
+        let mut steps = collection("steps", "Step", true);
+        steps.inlined_as_list = None;
+        steps.inlined = Some(true);
+        let mut shelf = with_slots(
+            identified("Shelf"),
+            vec![
+                collection("parcels", "Parcel", true),
+                collection("favorites", "Parcel", false),
+            ],
+        );
+        shelf.tree_root = true;
+        let schema = schema_of(vec![
+            shelf,
+            with_slots(identified("Parcel"), vec![steps]),
+            identified("Step"),
+        ]);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert_eq!(
+            columns_of(&out, "parcel"),
+            vec!["\"id\" text PRIMARY KEY", "\"shelf_id\" text NOT NULL"],
+            "got:\n{out}"
+        );
+        assert_eq!(
+            columns_of(&out, "step"),
+            vec!["\"id\" text PRIMARY KEY", "\"parcel_id\" text NOT NULL"],
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "ALTER TABLE \"parcel\" ADD CONSTRAINT \"parcel_shelf_id_fkey\" FOREIGN KEY \
+                 (\"shelf_id\") REFERENCES \"shelf\" (\"id\");"
+            ) && out.contains(
+                "ALTER TABLE \"step\" ADD CONSTRAINT \"step_parcel_id_fkey\" FOREIGN KEY \
+                 (\"parcel_id\") REFERENCES \"parcel\" (\"id\");"
+            ),
+            "each holder column references its holder; got:\n{out}"
+        );
+        assert!(
+            !out.contains("CREATE TABLE \"shelf_parcels\"")
+                && !out.contains("CREATE TABLE \"parcel_steps\""),
+            "an owned collection has no linking table; got:\n{out}"
+        );
+        assert!(
+            out.contains("CREATE TABLE \"shelf_favorites\""),
+            "a collection of references keeps its linking table; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_holder_column_is_nullable_when_the_part_need_not_have_that_holder() {
+        let mut pinned = ranged("pinned", "Tag");
+        pinned.inlined = Some(true);
+        let mut bundle = with_slots(identified("Bundle"), vec![pinned]);
+        bundle.tree_root = true;
+        let schema = schema_of(vec![
+            with_slots(
+                identified("Shelf"),
+                vec![
+                    collection("parcels", "Parcel", true),
+                    collection("bundles", "Bundle", true),
+                    collection("tags", "Tag", true),
+                ],
+            ),
+            with_slots(
+                identified("Grouping"),
+                vec![collection("parcels", "Parcel", true)],
+            ),
+            identified("Parcel"),
+            bundle,
+            identified("Tag"),
+            with_slots(
+                identified("Folder"),
+                vec![
+                    collection("folders", "Folder", true),
+                    collection("notes", "Note", true),
+                ],
+            ),
+            identified("Note"),
+            with_slots(identified("Crate"), vec![collection("boxes", "Box", true)]),
+            with_slots(identified("Box"), vec![collection("crates", "Crate", true)]),
+            with_slots(
+                identified("Hamper"),
+                vec![
+                    collection("baskets", "Basket", true),
+                    ranged("basket_id", "string"),
+                ],
+            ),
+            with_slots(
+                identified("Basket"),
+                vec![collection("hampers", "Hamper", true)],
+            ),
+        ]);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        for (table, columns, why) in [
+            (
+                "parcel",
+                vec![
+                    "\"grouping_id\" text",
+                    "\"shelf_id\" text",
+                    "CONSTRAINT \"parcel_one_owner\" CHECK (num_nonnulls(\"grouping_id\", \
+                     \"shelf_id\") <= 1)",
+                ],
+                "two classes own it, and at most one at a time",
+            ),
+            (
+                "bundle",
+                vec!["\"shelf_id\" text", "\"pinned_id\" text"],
+                "it is a tree_root",
+            ),
+            ("tag", vec!["\"shelf_id\" text"], "another slot contains it"),
+            ("folder", vec!["\"folder_id\" text"], "it owns itself"),
+            (
+                "note",
+                vec!["\"folder_id\" text NOT NULL"],
+                "a cycle above it does not lead back to it",
+            ),
+            (
+                "basket",
+                vec!["\"hamper_id\" text"],
+                "it owns its holder through a collection that keeps a linking table",
+            ),
+            ("box", vec!["\"crate_id\" text"], "it owns its holder"),
+            ("crate", vec!["\"box_id\" text"], "it owns its holder"),
+        ] {
+            let mut expected = vec!["\"id\" text PRIMARY KEY"];
+            expected.extend(columns);
+            assert_eq!(columns_of(&out, table), expected, "{why}; got:\n{out}");
+        }
+    }
+
+    #[test]
+    fn an_owning_collection_its_part_cannot_name_keeps_a_linking_table() {
+        let mut depot = with_slots(identified("Depot"), vec![collection("boxes", "Box", true)]);
+        depot.is_a = Some("Base".to_string());
+        let mut item_id = SlotDefinition::new("item_id");
+        item_id.identifier = true;
+        let bin = with_slots(
+            ClassDefinition::new("Bin"),
+            vec![item_id, collection("widgets", "Widget", true)],
+        );
+        let schema = schema_of(vec![
+            with_slots(
+                identified("Shelf"),
+                vec![
+                    collection("front", "Parcel", true),
+                    collection("back", "Parcel", true),
+                ],
+            ),
+            identified("Parcel"),
+            with_slots(
+                identified("Grouping"),
+                vec![collection("crates", "Crate", true)],
+            ),
+            with_slots(identified("Crate"), vec![ranged("grouping_id", "string")]),
+            with_slots(identified("Rack"), vec![collection("trays", "Tray", true)]),
+            with_slots(identified("Tray"), vec![ranged("rack_id", "Rack")]),
+            bin,
+            with_slots(
+                identified("BinItem"),
+                vec![collection("widgets", "Widget", true)],
+            ),
+            identified("Widget"),
+            identified("Base"),
+            depot,
+            identified("Box"),
+            with_slots(identified("Hold"), vec![collection("boxes", "Box", true)]),
+            with_slots(
+                identified("Pallet"),
+                vec![collection("parcels", "Parcel", true)],
+            ),
+        ]);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        let linked = |class: &str, slot: &str, reason: &str| LinkedCollection {
+            class: class.to_string(),
+            slot: slot.to_string(),
+            reason: reason.to_string(),
+        };
+        let one_owner_twice = "class `Shelf` owns `Parcel` through more than one slot (`back`, \
+                               `front`), and one column naming the owner cannot say which";
+        let same_name =
+            "owners `Bin`, `BinItem` of `Widget` would each name the column `bin_item_id`";
+        assert_eq!(
+            linked_owning_collections(&schema),
+            vec![
+                linked(
+                    "Grouping",
+                    "crates",
+                    "`Crate`'s slot `grouping_id` already becomes column `grouping_id`"
+                ),
+                linked("Shelf", "back", one_owner_twice),
+                linked("Shelf", "front", one_owner_twice),
+                linked(
+                    "Rack",
+                    "trays",
+                    "`Tray`'s slot `rack_id` already has a foreign key named `tray_rack_id_fkey`"
+                ),
+                linked("Bin", "widgets", same_name),
+                linked("BinItem", "widgets", same_name),
+            ]
+        );
+        for table in [
+            "grouping_crates",
+            "shelf_front",
+            "shelf_back",
+            "rack_trays",
+            "bin_widgets",
+            "bin_item_widgets",
+        ] {
+            assert!(
+                out.contains(&format!("CREATE TABLE \"{table}\" (")),
+                "`{table}` should stay a linking table; got:\n{out}"
+            );
+        }
+        assert_eq!(
+            columns_of(&out, "box"),
+            vec!["\"id\" text PRIMARY KEY", "\"hold_id\" text NOT NULL"],
+            "a container with no table neither owns the part nor shares it; got:\n{out}"
+        );
+        assert_eq!(
+            columns_of(&out, "parcel"),
+            vec!["\"id\" text PRIMARY KEY", "\"pallet_id\" text"],
+            "another owner keeps its column, NULL-able beside the linking tables; got:\n{out}"
+        );
+        for table in ["parcel", "crate", "tray", "widget", "box"] {
+            assert!(
+                out.contains(&format!("CREATE TABLE \"{table}\" (")),
+                "a part whose owner column falls back keeps its table; got:\n{out}"
+            );
+        }
+        assert!(
+            PostgresWriter::new().projection_gaps(&schema).contains(
+                &"slot `crates` of class `Grouping` owns its records but keeps a linking \
+                  table: `Crate`'s slot `grouping_id` already becomes column `grouping_id`"
+                    .to_string()
+            ),
+            "each fallback is reported"
+        );
+    }
+
     /// The owner gets a table now, and so does anything that was skipped
     /// only because it referenced the owner.
     #[test]
@@ -2959,6 +3530,26 @@ classes:
             schema.classes.insert(root.to_string(), class);
         }
 
+        // Owned parts: the library owns its shelves, a shelf owns its
+        // parcels, and the commons, keyed on a synthetic uuid, owns parcels
+        // too, so a parcel's two holder columns are NULL-able and typed apart.
+        for (owner, slot, part) in [
+            ("Library", "shelves", "Shelf"),
+            ("Shelf", "parcels", "Parcel"),
+            ("Commons", "stray_parcels", "Parcel"),
+        ] {
+            schema
+                .classes
+                .entry(part.to_string())
+                .or_insert_with(|| identified(part));
+            schema
+                .classes
+                .get_mut(owner)
+                .unwrap()
+                .attributes
+                .insert(slot.to_string(), collection(slot, part, true));
+        }
+
         schema
     }
 
@@ -3112,6 +3703,19 @@ classes:
             "CONSTRAINT \"locale_record_key\" UNIQUE NULLS NOT DISTINCT (\"library_id\", \"id\")"
         ));
         assert!(out.contains("FOREIGN KEY (\"in_locale_uuid\") REFERENCES \"locale\" (\"uuid\")"));
+        assert_eq!(
+            columns_of(&out, "parcel"),
+            vec![
+                "\"id\" text PRIMARY KEY",
+                "\"commons_id\" uuid",
+                "\"shelf_id\" text",
+                "CONSTRAINT \"parcel_one_owner\" CHECK (num_nonnulls(\"commons_id\", \"shelf_id\") <= 1)"
+            ]
+        );
+        assert!(out.contains(
+            "ALTER TABLE \"shelf\" ADD CONSTRAINT \"shelf_library_id_fkey\" FOREIGN KEY \
+             (\"library_id\") REFERENCES \"library\" (\"id\");"
+        ));
     }
 
     #[test]
