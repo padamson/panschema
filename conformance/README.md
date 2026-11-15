@@ -86,6 +86,23 @@ default prefix and typing a rangeless imported slot from the root's
 element into the root's namespace, which is why they are not the reference
 for meaning.
 
+```bash
+uv run --project conformance conformance/probe_identifier_columns.py
+```
+
+The identifier-columns probe runs `gen-sqlddl`, `gen-json-schema`, and
+`gen-pydantic` over a schema in which every class has an identifier and a
+root holds some parts through an `inlined_as_list` slot. `gen-sqlddl`
+gives each such part a column naming its holder (`Part."Holder_id"`, a
+foreign key) and keeps a linking table for a multivalued slot that is not
+inlined. Every id is a `TEXT` column, whether its range is `string` with a
+pattern, `uri`, `uriorcurie`, or a type derived from `uriorcurie`, and no
+generator acts on `implicit_prefix`. `gen-json-schema` puts `format: uri`
+on a `uri`-ranged id only and carries an id's `pattern`; `gen-sqlddl`
+emits no `CHECK` for one. It is the evidence behind the Postgres writer
+keeping an IRI id a `text` column rather than `uuid`. The pattern `CHECK`
+on that column is panschema's own choice, as on any patterned column.
+
 Load an arbitrary schema through the reference implementation:
 
 ```bash

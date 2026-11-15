@@ -155,18 +155,18 @@ fn render_body(schema: &SchemaDefinition) -> String {
         let table = crate::casing::snake_case(class_name);
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
         let key = class_primary_key(class, schema);
-        let pk_slot = key.slot.clone();
+        let pk_slot = key.slot.as_deref();
 
         writeln!(out, "CREATE TABLE {} (", quote_ident(&table)).ok();
+        let pk_suffix = match pk_slot {
+            // The key names one of this class's effective slots.
+            Some(slot_name) => column_checks(&key.col, &effective[slot_name], schema),
+            None => " DEFAULT gen_random_uuid()".to_string(),
+        };
         let mut lines = vec![format!(
-            "    {} {} PRIMARY KEY{}",
+            "    {} {} PRIMARY KEY{pk_suffix}",
             quote_ident(&key.col),
             key.sql_type,
-            if pk_slot.is_none() {
-                " DEFAULT gen_random_uuid()"
-            } else {
-                ""
-            }
         )];
         let scope = record_scope(class_name, class, schema, &holders);
         if let Some(RecordScope::Scoped {
@@ -198,7 +198,7 @@ fn render_body(schema: &SchemaDefinition) -> String {
         // actually emits.
         let slot_columns = slot_column_map(class, schema);
         for (slot_name, slot) in &effective {
-            if pk_slot.as_deref() == Some(slot_name.as_str()) {
+            if pk_slot == Some(slot_name.as_str()) {
                 continue;
             }
             // A multivalued class range has no column here; it becomes its
@@ -237,17 +237,11 @@ fn render_body(schema: &SchemaDefinition) -> String {
                 });
             } else {
                 // A multivalued scalar becomes an array of its element type.
-                // Its value constraints are per-element and have no CHECK
-                // form over an array, so they are dropped here and reported
-                // by `skipped_constraints`.
                 let sql_type = match is_multivalued(slot) {
                     true => format!("{}[]", sql_type_for_slot_range(range, schema)),
                     false => sql_type_for_slot_range(range, schema),
                 };
-                let checks = match is_multivalued(slot) {
-                    true => String::new(),
-                    false => column_checks(col, slot),
-                };
+                let checks = column_checks(col, slot, schema);
                 lines.push(format!(
                     "    {} {sql_type}{not_null}{checks}",
                     quote_ident(col)
@@ -391,21 +385,45 @@ fn render_body(schema: &SchemaDefinition) -> String {
     out
 }
 
+/// Which of a scalar slot's value constraints its column can check.
+struct Checkable {
+    pattern: bool,
+    bounds: bool,
+}
+
+/// What the column for scalar `slot` can check. An array column checks
+/// neither, since no `CHECK` reaches its elements. Otherwise a regex match
+/// needs a `text` column and a numeric bound a numeric one: `integer ~
+/// text` and `date >= 1` parse and then fail when the table is created.
+/// [`column_checks`] emits by this and [`skipped_constraints`] reports by
+/// it, so the DDL and the diagnostic cannot disagree.
+fn checkable(slot: &SlotDefinition, schema: &SchemaDefinition) -> Checkable {
+    let sql_type = sql_type_for_slot_range(slot.range.as_deref(), schema);
+    let single = !is_multivalued(slot);
+    Checkable {
+        pattern: single && sql_type == "text",
+        bounds: single && matches!(sql_type.as_str(), "integer" | "double precision"),
+    }
+}
+
 /// Inline `CHECK` clauses for a scalar column, from the slot's value
-/// constraints — the leading-space-prefixed suffix appended to the column
-/// definition. Empty when the slot has none.
+/// constraints its column can check ([`checkable`]) — the
+/// leading-space-prefixed suffix appended to the column definition. Empty
+/// when there are none.
 ///
 /// - `pattern` → `CHECK (col ~ 'regex')` (single quotes doubled so the
 ///   literal can't break the statement, same escaping the enum values use).
 /// - `minimum_value` / `maximum_value` → a single `CHECK` combining both
 ///   with `AND` when both are set, or just the one side when only one is.
-fn column_checks(col: &str, slot: &crate::linkml::SlotDefinition) -> String {
+fn column_checks(col: &str, slot: &SlotDefinition, schema: &SchemaDefinition) -> String {
     let col = quote_ident(col);
+    let can = checkable(slot, schema);
     let mut checks = String::new();
-    if let Some(p) = &slot.pattern {
+    if let Some(p) = slot.pattern.as_ref().filter(|_| can.pattern) {
         checks.push_str(&format!(" CHECK ({col} ~ '{}')", p.replace('\'', "''")));
     }
     let bound = match (slot.minimum_value, slot.maximum_value) {
+        _ if !can.bounds => None,
         (Some(min), Some(max)) => Some(format!("{col} >= {min} AND {col} <= {max}")),
         (Some(min), None) => Some(format!("{col} >= {min}")),
         (None, Some(max)) => Some(format!("{col} <= {max}")),
@@ -663,7 +681,9 @@ pub struct SkippedConstraint {
 /// slot constrains each element, and Postgres has no `CHECK` form for that
 /// over an array column: `arr ~ 'p'` is not an operator, and the subquery
 /// over `unnest` that would express it is not allowed inside a `CHECK`.
-/// Emitting one anyway yields a script that parses and then fails when the
+/// On a single-valued slot, a `pattern` on a column that is not `text` and
+/// a bound on one that is not numeric have no operator either. Emitting
+/// one anyway yields a script that parses and then fails when the
 /// database runs it, which is the worst of the three options. So the
 /// constraint is dropped and named here instead.
 pub fn skipped_constraints(schema: &SchemaDefinition) -> Vec<SkippedConstraint> {
@@ -675,12 +695,13 @@ pub fn skipped_constraints(schema: &SchemaDefinition) -> Vec<SkippedConstraint> 
         }
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
         for (slot_name, slot) in &effective {
-            if !is_multivalued(slot) || is_class_range(slot, schema) {
+            if is_class_range(slot, schema) {
                 continue;
             }
+            let can = checkable(slot, schema);
             let dropped = [
-                slot.pattern.is_some().then_some("pattern"),
-                (slot.minimum_value.is_some() || slot.maximum_value.is_some())
+                (slot.pattern.is_some() && !can.pattern).then_some("pattern"),
+                ((slot.minimum_value.is_some() || slot.maximum_value.is_some()) && !can.bounds)
                     .then_some("value bounds"),
             ]
             .into_iter()
@@ -689,14 +710,21 @@ pub fn skipped_constraints(schema: &SchemaDefinition) -> Vec<SkippedConstraint> 
             if dropped.is_empty() {
                 continue;
             }
+            let dropped = dropped.join(" and ");
+            let reason = match is_multivalued(slot) {
+                true => format!(
+                    "{dropped} on a multivalued slot constrains each element, which has no \
+                     Postgres CHECK form over an array column"
+                ),
+                false => format!(
+                    "{dropped} has no Postgres CHECK form on a `{}` column",
+                    sql_type_for_slot_range(slot.range.as_deref(), schema)
+                ),
+            };
             out.push(SkippedConstraint {
                 class: class_name.clone(),
                 slot: slot_name.clone(),
-                reason: format!(
-                    "{} on a multivalued slot constrains each element, which has no Postgres \
-                     CHECK form over an array column",
-                    dropped.join(" and ")
-                ),
+                reason,
             });
         }
     }
@@ -2400,6 +2428,96 @@ classes:
         );
     }
 
+    /// `integer ~ text` and `date >= 1` parse and then fail at `CREATE
+    /// TABLE`, taking the whole script with them.
+    #[test]
+    fn a_constraint_its_column_type_cannot_check_is_dropped_and_reported() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut shade = crate::linkml::EnumDefinition::new("Shade");
+        shade.permissible_values.insert(
+            "light".to_string(),
+            crate::linkml::PermissibleValue::new("light"),
+        );
+        schema.enums.insert("Shade".to_string(), shade);
+        let mut class = ClassDefinition::new("Sample");
+        let slot = |name: &str, range: &str| {
+            let mut slot = SlotDefinition::new(name);
+            slot.range = Some(range.to_string());
+            slot
+        };
+        let mut number = slot("number", "integer");
+        number.identifier = true;
+        number.pattern = Some("^[0-9]+$".to_string());
+        number.minimum_value = Some(1.0);
+        let mut label = slot("label", "string");
+        label.maximum_value = Some(9.0);
+        let mut shade = slot("shade", "Shade");
+        shade.pattern = Some("^l".to_string());
+        let mut stamped = slot("stamped", "date");
+        stamped.minimum_value = Some(5.0);
+        for slot in [number, label, shade, stamped] {
+            class.attributes.insert(slot.name.clone(), slot);
+        }
+        schema.classes.insert("Sample".to_string(), class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        let checks: Vec<&str> = out.lines().filter(|l| l.contains("CHECK")).collect();
+        assert_eq!(
+            checks,
+            vec!["    \"number\" integer PRIMARY KEY CHECK (\"number\" >= 1),"],
+            "only the bound on the integer key has an operator in Postgres; got:\n{out}"
+        );
+
+        let reported: Vec<(String, String)> = skipped_constraints(&schema)
+            .into_iter()
+            .map(|s| (s.slot, s.reason))
+            .collect();
+        let expect = |slot: &str, what: &str, sql_type: &str| {
+            (
+                slot.to_string(),
+                format!("{what} has no Postgres CHECK form on a `{sql_type}` column"),
+            )
+        };
+        assert_eq!(
+            reported,
+            vec![
+                expect("label", "value bounds", "text"),
+                expect("number", "pattern", "integer"),
+                expect("shade", "pattern", "\"shade\""),
+                expect("stamped", "value bounds", "date"),
+            ]
+        );
+    }
+
+    /// A multivalued identifier's constraints are reported as dropped, so
+    /// the key must not carry them.
+    #[test]
+    fn a_multivalued_identifiers_constraints_are_not_emitted() {
+        let mut class = ClassDefinition::new("Sample");
+        let mut ids = SlotDefinition::new("ids");
+        ids.range = Some("string".to_string());
+        ids.identifier = true;
+        ids.multivalued = true;
+        ids.pattern = Some("^m".to_string());
+        class.attributes.insert("ids".to_string(), ids);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CHECK"),
+            "the dropped constraint must not also be emitted; got:\n{out}"
+        );
+        assert_eq!(
+            skipped_constraints(&schema)
+                .iter()
+                .map(|s| s.slot.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ids"]
+        );
+    }
+
     /// A single-valued slot's `pattern` is emitted as a `CHECK`, so it must
     /// not also be reported as dropped — that would send an author looking
     /// for a missing constraint that is right there in the DDL.
@@ -3043,6 +3161,38 @@ classes:
         assert!(
             out.contains("\"code\" text CHECK (\"code\" ~ '^[A-Z]{3}$')"),
             "expected an inline regex CHECK on the patterned column; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_identifiers_constraints_check_the_primary_key() {
+        let mut parcel = ClassDefinition::new("Parcel");
+        let mut id = SlotDefinition::new("id");
+        id.range = Some("string".to_string());
+        id.identifier = true;
+        parcel.attributes.insert("id".to_string(), id);
+        let mut narrowed = SlotDefinition::new("id");
+        narrowed.pattern = Some("^ex:[0-9a-f]{8}$".to_string());
+        parcel.slot_usage.insert("id".to_string(), narrowed);
+        let mut schema = schema_with_class(parcel);
+        let mut ticket = ClassDefinition::new("Ticket");
+        let mut number = SlotDefinition::new("number");
+        number.range = Some("integer".to_string());
+        number.identifier = true;
+        number.minimum_value = Some(1.0);
+        ticket.attributes.insert("number".to_string(), number);
+        schema.classes.insert("Ticket".to_string(), ticket);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("\"id\" text PRIMARY KEY CHECK (\"id\" ~ '^ex:[0-9a-f]{8}$')"),
+            "expected the pattern slot_usage gives the identifier as a CHECK on the primary key; \
+             got:\n{out}"
+        );
+        assert!(
+            out.contains("\"number\" integer PRIMARY KEY CHECK (\"number\" >= 1)"),
+            "expected the identifier's value bound as a CHECK on the primary key; got:\n{out}"
         );
     }
 
