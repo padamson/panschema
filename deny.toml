@@ -1,5 +1,5 @@
 # cargo-deny configuration
-# Run: cargo deny check
+# Run: cargo deny check bans licenses sources (advisories: cargo lockpatrol check)
 # Docs: https://embarkstudios.github.io/cargo-deny/
 
 [graph]
@@ -10,6 +10,9 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
+# cargo-lockpatrol runs the advisory check and fails on an entry no tracked
+# Cargo.lock uses, so a stale ignore cannot outlive its crate.
+unused-ignored-advisory = "deny"
 ignore = [
     # Transitive unmaintained-crate warnings — not vulnerabilities. Cleared
     # when upstream consumers (wgpu/naga, proc-macro libs) migrate off them.
