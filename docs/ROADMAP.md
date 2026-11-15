@@ -83,7 +83,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 - **Generative and fuzz testing** ([feature 42](features/42-generative-and-fuzz-testing.md)): properties checked over generated schemas, and the readers hardened against arbitrary bytes. Shipped (scaffolding and a smoke campaign; long campaigns run on dispatch).
 - **In-process e2e serving** ([feature 49](features/49-in-process-e2e-serving.md)): the browser suite serves its pages from an in-process service instead of binding a port per test. Shipped.
 - **LinkML coverage**: `designates_type` chooses a union member outright; an omitted `default_range` means `string`, as LinkML's derivation rules specify; an annotation value may be any object, as LinkML 1.6 allows; a declared URI that no prefix expands is a load warning; a slot left untyped is reported and `--strict` refuses it. Enumerations participate in the rules that key on their values, on the cards, in the graph, and in the linting. Shipped.
-- **Agent skill** ([feature 40](features/40-agent-facing-skill-that-cannot-drift.md)): renamed `panschema-development`, installed through the Agent Skills CLI as the one channel, and carrying its own version rather than the crate's, so it moves when its content does. Slice 1 shipped.
+- **Agent skill** ([feature 40](features/40-agent-facing-skill-that-cannot-drift.md)): named `panschema-usage` (`panschema-development` until skill version 0.5.20), installed through the Agent Skills CLI as the one channel, and carrying its own version rather than the crate's, so it moves when its content does. Slice 1 shipped.
 
 ### v0.5.0 — Book Editions, Self-Describing Datasets, and Exit Codes ✅ (released 2026-11-11)
 

@@ -21,12 +21,12 @@ fn repo_root() -> PathBuf {
 }
 
 fn skill_md() -> String {
-    fs::read_to_string(repo_root().join("skills/panschema-development/SKILL.md")).expect("SKILL.md")
+    fs::read_to_string(repo_root().join("skills/panschema-usage/SKILL.md")).expect("SKILL.md")
 }
 
 /// The skill directory's name. The frontmatter must repeat it, so the two
 /// are compared rather than both hard-coded.
-const SKILL_DIR: &str = "panschema-development";
+const SKILL_DIR: &str = "panschema-usage";
 
 /// SKILL.md's YAML frontmatter, parsed. Any spelling the skill format
 /// accepts — a flow mapping, a quoted or bare value — has to pass.
@@ -42,7 +42,7 @@ fn skill_frontmatter() -> serde_norway::Value {
 
 fn skill_ref(name: &str) -> String {
     let path = repo_root()
-        .join("skills/panschema-development/references")
+        .join("skills/panschema-usage/references")
         .join(name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
@@ -259,7 +259,7 @@ fn the_skill_links_every_reference() {
     for name in ["cli.md", "manifest.md", "formats.md"] {
         assert!(skill.contains(name), "SKILL.md must link references/{name}");
     }
-    let refs = repo_root().join("skills/panschema-development/references");
+    let refs = repo_root().join("skills/panschema-usage/references");
     for entry in fs::read_dir(&refs).expect("references dir") {
         let file = entry.expect("dir entry").file_name();
         let name = file.to_string_lossy();

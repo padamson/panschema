@@ -50,7 +50,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-skill=skills/panschema-development/SKILL.md
+skill=skills/panschema-usage/SKILL.md
 
 # Initial commit: nothing to compare against.
 git rev-parse -q --verify HEAD >/dev/null 2>&1 || exit 0
