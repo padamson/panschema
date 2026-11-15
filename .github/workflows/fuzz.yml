@@ -29,6 +29,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_FUZZ_VERSION: "0.13.2"
+
 jobs:
   fuzz:
     name: Fuzz ${{ matrix.target }}
@@ -57,10 +60,11 @@ jobs:
           rustup toolchain install nightly --profile minimal
           rustup component add llvm-tools-preview --toolchain nightly
 
+      # Not on install-action: its manifest has no cargo-fuzz. Stable
+      # builds the tool; only the fuzz targets need nightly. --force, so a
+      # copy already in ~/.cargo/bin cannot stand in for the pinned one.
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
-        with:
-          tool: cargo-fuzz
+        run: cargo +stable install --locked --force cargo-fuzz --version "$CARGO_FUZZ_VERSION"
 
       # The working corpus compounds across dispatches — without this,
       # every campaign restarts from the seeds and re-derives the same
@@ -85,9 +89,9 @@ jobs:
       # the script through the environment, never by interpolation into
       # the script text.
       #
-      # `--target` is explicit because the prebuilt cargo-fuzz binary is
-      # statically linked against musl and defaults the fuzz build to its
-      # own triple — where ASan fails with "sanitizer is incompatible with
+      # `--target` is explicit because cargo-fuzz defaults the fuzz build
+      # to the triple it was itself built for, and a musl-built copy sends
+      # it to musl, where ASan fails with "sanitizer is incompatible with
       # statically linked libc". The runner's host triple is gnu.
       - name: Fuzz ${{ matrix.target }}
         env:

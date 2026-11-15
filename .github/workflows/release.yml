@@ -54,6 +54,7 @@ jobs:
       uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
       with:
         tool: cargo-semver-checks
+        fallback: none
 
     # html_writer.rs include_bytes! the viz bundle at compile time; empty
     # placeholders satisfy rustdoc without a wasm-pack run, and the bundle
@@ -138,6 +139,7 @@ jobs:
       uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
       with:
         tool: wasm-pack
+        fallback: none
 
     - name: Build WASM package
       run: wasm-pack build panschema-viz --target web
@@ -224,6 +226,7 @@ jobs:
       uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
       with:
         tool: parse-changelog
+        fallback: none
 
     - name: Get version
       id: get_version
@@ -274,6 +277,7 @@ jobs:
       uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
       with:
         tool: wasm-pack
+        fallback: none
 
     # The published package must be self-contained: build the viz bundle
     # and stage it at the in-crate path build.rs prefers, so `cargo
