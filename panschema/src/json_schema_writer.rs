@@ -358,7 +358,10 @@ fn scalar_json_type(range: &str) -> Value {
         "date" => json!({ "type": "string", "format": "date" }),
         "datetime" => json!({ "type": "string", "format": "date-time" }),
         "time" => json!({ "type": "string", "format": "time" }),
-        "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
+        // `gen-json-schema` gives `uri` its format and `uriorcurie` none,
+        // since a CURIE is not a URI (`conformance/probe_identifier_columns.py`).
+        "uri" => json!({ "type": "string", "format": "uri" }),
+        "string" | "str" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
         | "nodeidentifier" | "jsonpointer" | "jsonpath" | "sparqlpath" => {
             json!({ "type": "string" })
         }
@@ -439,7 +442,11 @@ mod tests {
             json!({ "type": "string", "format": "time" })
         );
         assert_eq!(scalar_json_type("string"), json!({ "type": "string" }));
-        assert_eq!(scalar_json_type("uri"), json!({ "type": "string" }));
+        assert_eq!(
+            scalar_json_type("uri"),
+            json!({ "type": "string", "format": "uri" })
+        );
+        assert_eq!(scalar_json_type("uriorcurie"), json!({ "type": "string" }));
         assert_eq!(scalar_json_type("Wine"), Value::Bool(true));
     }
 
@@ -701,6 +708,38 @@ classes:
         assert_eq!(defs["Stamped"]["properties"]["stamp"]["type"], "integer");
     }
 
+    /// `gen-json-schema` gives a reference the target identifier's type,
+    /// format included (`conformance/probe_identifier_columns.py`).
+    #[test]
+    fn a_reference_to_a_uri_identified_class_is_a_uri() {
+        let mut schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: links
+classes:
+  Page:
+    tree_root: true
+    attributes:
+      links:
+        range: Link
+        multivalued: true
+  Link:
+    attributes:
+      url:
+        identifier: true
+        range: uri
+",
+        )
+        .expect("parse schema");
+        for (name, class) in schema.classes.iter_mut() {
+            class.name = name.clone();
+        }
+        let doc = build_json_schema(&schema);
+        assert_eq!(
+            doc["$defs"]["Page"]["properties"]["links"]["items"],
+            json!({ "type": "string", "format": "uri" })
+        );
+    }
+
     #[test]
     fn custom_types_resolve_to_base_scalar_and_facets() {
         let mut schema: SchemaDefinition = serde_norway::from_str(
@@ -716,7 +755,11 @@ classes:
         range: Count
       home:
         range: UsPhone
+      site:
+        range: Homepage
 types:
+  Homepage:
+    typeof: uri
   PhoneNumber:
     typeof: string
     pattern: '^\\+[0-9]+$'
@@ -740,6 +783,11 @@ types:
         );
         // A type carrying only `uri: xsd:integer` → integer.
         assert_eq!(person["properties"]["visits"], json!({ "type": "integer" }));
+        assert_eq!(
+            person["properties"]["site"],
+            json!({ "type": "string", "format": "uri" }),
+            "a type derived from `uri` carries its format"
+        );
         // A `typeof` chain resolves to the base scalar and inherits the
         // ancestor's pattern.
         assert_eq!(

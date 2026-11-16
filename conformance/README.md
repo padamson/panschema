@@ -98,7 +98,8 @@ foreign key) and keeps a linking table for a multivalued slot that is not
 inlined. Every id is a `TEXT` column, whether its range is `string` with a
 pattern, `uri`, `uriorcurie`, or a type derived from `uriorcurie`, and no
 generator acts on `implicit_prefix`. `gen-json-schema` puts `format: uri`
-on a `uri`-ranged id only and carries an id's `pattern`; `gen-sqlddl`
+on a `uri`-ranged id, and on a reference to a class it identifies, and
+carries an id's `pattern` (not onto a reference); `gen-sqlddl`
 emits no `CHECK` for one. It is the evidence behind the Postgres writer
 keeping an IRI id a `text` column rather than `uuid`. The pattern `CHECK`
 on that column is panschema's own choice, as on any patterned column.

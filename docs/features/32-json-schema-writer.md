@@ -53,10 +53,13 @@ the 2020-12 meta-schema), and representative instances validate as expected
   Rust, and Postgres writers use — so JSON Schema, Rust types, and SHACL all
   describe the same shape.
 - **Range → type** mirrors the established LinkML built-in mapping (see the
-  Rust/Postgres writers): `string`/`uri`/`curie`/… → `"string"`, `integer` →
+  Rust/Postgres writers): `string`/`uriorcurie`/`curie`/… → `"string"`, `integer` →
   `"integer"`, `float`/`double`/`decimal` → `"number"`, `boolean` →
   `"boolean"`, `date`/`datetime`/`time` → `"string"` with the matching
-  `format`. A class range → `$ref`; an enum range → the enum's `enum` list.
+  `format`, and `uri` → `"string"` with `format: uri`, as `gen-json-schema`
+  writes it (a CURIE is not a URI, so `uriorcurie` gets no format;
+  `conformance/probe_identifier_columns.py`). A class range → `$ref`; an
+  enum range → the enum's `enum` list.
 - **Additive + skip-clean.** A construct panschema can't express as JSON Schema
   is skipped with a diagnostic (the writer-projection warning pattern), never
   emitted broken.

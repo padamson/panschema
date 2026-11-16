@@ -49,10 +49,11 @@ slots:
   parts: {range: Part, multivalued: true, inlined_as_list: true}
   tags: {range: Tag, multivalued: true}
   owner: {range: Holder}
+  uri_refs: {range: UriRecord, multivalued: true}
 classes:
   Holder:
     tree_root: true
-    slots: [id, parts, tags]
+    slots: [id, parts, tags, uri_refs]
   Part:
     slots: [id, owner]
   Tag:
@@ -99,6 +100,7 @@ def main() -> int:
                 ("PrefixedRecord", "prefixed_id"),
                 ("Holder", "parts"),
                 ("Holder", "tags"),
+                ("Holder", "uri_refs"),
             ]:
                 print(f"{cls}.{slot}: {json.dumps(defs[cls]['properties'][slot])}")
         except (ValueError, KeyError) as e:
