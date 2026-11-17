@@ -1066,7 +1066,7 @@ pub fn minted_instance_iris(
 ) -> std::collections::BTreeSet<String> {
     sets.iter()
         .flat_map(|set| &set.instances)
-        .map(|inst| crate::instances::instance_iri_string(schema, inst))
+        .filter_map(|inst| crate::instances::instance_iri_string(schema, inst))
         .collect()
 }
 
@@ -2631,7 +2631,9 @@ pub fn cross_dataset_iri_collisions(
         BTreeMap::new();
     for (label, set) in datasets {
         for inst in &set.instances {
-            let iri = crate::instances::instance_iri_string(schema, inst);
+            let Some(iri) = crate::instances::instance_iri_string(schema, inst) else {
+                continue;
+            };
             minted
                 .entry(iri)
                 .or_default()
@@ -2705,7 +2707,11 @@ pub fn cross_dataset_unintended_splits(
             let Some(class) = inst.types.first() else {
                 continue;
             };
-            let iri = crate::instances::instance_iri_string(schema, inst);
+            // A record with no identity is the same individual as no other,
+            // so it can neither join nor split.
+            let Some(iri) = crate::instances::instance_iri_string(schema, inst) else {
+                continue;
+            };
             // The authored assignments, not the display literals: a slot
             // serving as the record's label never reaches `literals`, so
             // comparing those would call every same-named record identical.
@@ -4325,6 +4331,7 @@ classes:
                 .collect(),
             slot_values: Vec::new(),
             scope: None,
+            anonymous: false,
         }
     }
 
@@ -4457,6 +4464,39 @@ classes:
         assert!(
             cross_dataset_iri_collisions(&schema, &[("one.yaml", &one)]).is_empty(),
             "a single dataset can collide with nothing"
+        );
+    }
+
+    /// A dataset holding one record the data gives no identifier, at
+    /// `stamps[0]`.
+    fn anonymous_dataset() -> crate::instances::InstanceSet {
+        crate::instances::InstanceSet {
+            instances: vec![crate::instances::Instance {
+                anonymous: true,
+                ..instance("stamps[0]", &[])
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn anonymous_records_at_one_place_in_two_datasets_do_not_collide() {
+        let schema = collision_schema();
+        let (one, other) = (anonymous_dataset(), anonymous_dataset());
+        let collisions =
+            cross_dataset_iri_collisions(&schema, &[("one.yaml", &one), ("other.yaml", &other)]);
+        assert!(
+            collisions.is_empty(),
+            "a place names a record in one dataset only; got: {collisions:?}"
+        );
+    }
+
+    #[test]
+    fn an_anonymous_record_mints_no_iri_for_a_sibling_reference_to_match() {
+        let schema = collision_schema();
+        assert_eq!(
+            minted_instance_iris(&schema, &[anonymous_dataset()]),
+            std::collections::BTreeSet::new()
         );
     }
 

@@ -446,7 +446,7 @@
                 <div class="preview-content preview-padded">
                     {%- let id = sample_individual.id %}
                     {%- let label = sample_individual.label %}
-                    {%- let iri = sample_individual.iri %}
+                    {%- let iri = Some(sample_individual.iri) %}
                     {%- let description = sample_individual.description %}
                     {%- let types = sample_individual.types %}
                     {%- let property_values = sample_individual.property_values %}

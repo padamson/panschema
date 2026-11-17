@@ -13,7 +13,7 @@ use sophia::api::serializer::{QuadSerializer, TripleSerializer};
 use sophia::inmem::graph::FastGraph;
 use sophia::iri::Iri;
 
-use crate::instances::{instance_iri_string, instance_iris_by_id};
+use crate::instances::instance_iri_string;
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::{SchemaDefinition, SlotDefinition};
 use crate::linkml_resolve::{
@@ -643,11 +643,7 @@ pub fn build_rdf_graph_with_instances(
     schema: &SchemaDefinition,
     instances: Option<&crate::instances::InstanceSet>,
 ) -> IoResult<FastGraph> {
-    let mut graph = build_rdf_graph(schema)?;
-    if let Some(set) = instances {
-        emit_instances(&mut graph, schema, set)?;
-    }
-    Ok(graph)
+    build_rdf_graph_for_dataset(schema, instances, None)
 }
 
 /// What an instance graph states about the dataset it holds, so a reader
@@ -675,7 +671,7 @@ impl DatasetDescription {
     }
 }
 
-/// [`build_rdf_graph_with_instances`] plus, when supplied, one
+/// The OWL graph, the A-box when supplied, and, when supplied, one
 /// `dcat:Dataset` node describing the dataset the A-box holds. The node is
 /// a blank node: a dataset has no IRI of its own to mint.
 pub fn build_rdf_graph_for_dataset(
@@ -683,7 +679,10 @@ pub fn build_rdf_graph_for_dataset(
     instances: Option<&crate::instances::InstanceSet>,
     dataset: Option<&DatasetDescription>,
 ) -> IoResult<FastGraph> {
-    let mut graph = build_rdf_graph_with_instances(schema, instances)?;
+    let mut graph = build_rdf_graph(schema)?;
+    if let Some(set) = instances {
+        emit_instances(&mut graph, schema, set, dataset)?;
+    }
     if let Some(dataset) = dataset {
         emit_dataset_description(&mut graph, dataset)?;
     }
@@ -722,17 +721,84 @@ fn emit_dataset_description(graph: &mut FastGraph, dataset: &DatasetDescription)
 /// concatenated N-Triples (where labels stop being per document) keep two
 /// datasets apart, and a rerun writes the same bytes.
 fn dataset_node_label(dataset: &DatasetDescription) -> String {
+    blank_node_label(
+        "dataset",
+        [
+            dataset.identifier.as_str(),
+            dataset.version.as_str(),
+            dataset.conforms_to.as_deref().unwrap_or(""),
+        ],
+    )
+}
+
+/// `{kind}-` and a digest of `parts`: a label nothing else spells.
+fn blank_node_label(kind: &str, parts: impl IntoIterator<Item = impl AsRef<str>>) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    for part in [
-        dataset.identifier.as_str(),
-        dataset.version.as_str(),
-        dataset.conforms_to.as_deref().unwrap_or(""),
-    ] {
-        hasher.update(part.as_bytes());
+    for part in parts {
+        hasher.update(part.as_ref().as_bytes());
         hasher.update([0]);
     }
-    format!("dataset-{}", &hex::encode(hasher.finalize())[..16])
+    format!("{kind}-{}", &hex::encode(hasher.finalize())[..16])
+}
+
+/// A digest of what `set`'s records say: what tells two datasets apart
+/// when nothing names either.
+fn records_digest(set: &crate::instances::InstanceSet) -> String {
+    use std::borrow::Cow;
+    let parts = set.instances.iter().flat_map(|inst| {
+        let values = inst.slot_values.iter().flat_map(|sv| {
+            std::iter::once(Cow::Borrowed(sv.slot.as_str())).chain(
+                sv.values
+                    .iter()
+                    .map(|value| Cow::Owned(crate::validate::value_display(value))),
+            )
+        });
+        std::iter::once(Cow::Borrowed(inst.id.as_str()))
+            .chain(inst.types.iter().map(|class| Cow::Borrowed(class.as_str())))
+            .chain(values)
+    });
+    blank_node_label("records", parts)
+}
+
+/// The node each record of `set` is in the graph, keyed by its id: the
+/// record's IRI, or a blank node for a record the data gives no identity,
+/// as LinkML's own RDF has it. A blank node's label is a digest of the
+/// record's place and of its dataset (the description when there is one,
+/// so an edit elsewhere in the dataset moves no label; what the records
+/// say otherwise), so two datasets never share a label, even once their
+/// N-Triples are concatenated.
+fn record_nodes<'a>(
+    schema: &SchemaDefinition,
+    set: &'a crate::instances::InstanceSet,
+    dataset: Option<&DatasetDescription>,
+) -> IoResult<std::collections::BTreeMap<&'a str, sophia::api::term::SimpleTerm<'static>>> {
+    use sophia::api::term::{BnodeId, SimpleTerm};
+    let mut dataset_label: Option<String> = None;
+    set.instances
+        .iter()
+        .map(|inst| {
+            let node = match instance_iri_string(schema, inst) {
+                Some(iri) => iri_term(&iri)?,
+                None => {
+                    let dataset_label = dataset_label.get_or_insert_with(|| {
+                        dataset.map_or_else(|| records_digest(set), dataset_node_label)
+                    });
+                    let label =
+                        blank_node_label("record", [dataset_label.as_str(), inst.id.as_str()]);
+                    SimpleTerm::BlankNode(BnodeId::new_unchecked(sophia::api::MownStr::from(label)))
+                }
+            };
+            Ok((inst.id.as_str(), node))
+        })
+        .collect()
+}
+
+/// `iri` as a graph term, refused when it is not an IRI.
+fn iri_term(iri: &str) -> IoResult<sophia::api::term::SimpleTerm<'static>> {
+    Ok(sophia::api::term::SimpleTerm::Iri(
+        sophia::iri::IriRef::new_unchecked(sophia::api::MownStr::from(make_iri(iri)?.unwrap())),
+    ))
 }
 
 /// The predicate a record asserts slot `name` under: the IRI of the slot as
@@ -752,7 +818,10 @@ fn instance_predicate(
 /// Emit each instance as an `owl:NamedIndividual`: `rdf:type` per declared
 /// class, `rdfs:label` from the display name, one data-property triple per
 /// scalar slot value, and one object-property triple per id reference,
-/// resolved to the referenced instance's IRI. A conforming scalar's literal
+/// resolved to the referenced instance's IRI. A record the data gives no
+/// identity is a blank node instead, typed by its class alone and with no
+/// `rdfs:label`: nothing names it, so the graph asserts no name. A
+/// conforming scalar's literal
 /// carries the datatype the slot's range implies — the same derivation the
 /// SHACL writer uses for `sh:datatype`, so an integer under a float-ranged
 /// slot lands as `xsd:float` and agrees with the shapes emitted from the
@@ -767,6 +836,7 @@ fn emit_instances(
     graph: &mut FastGraph,
     schema: &SchemaDefinition,
     set: &crate::instances::InstanceSet,
+    dataset: Option<&DatasetDescription>,
 ) -> IoResult<()> {
     use crate::instances::{InstanceValue, ScalarValue};
 
@@ -795,20 +865,22 @@ fn emit_instances(
         None
     };
 
-    let iri_by_id = instance_iris_by_id(schema, std::slice::from_ref(set));
+    let node_by_id = record_nodes(schema, set, dataset)?;
 
     for inst in &set.instances {
-        let subject = make_iri(&instance_iri_string(schema, inst))?;
+        let subject = &node_by_id[inst.id.as_str()];
 
-        triple(graph, &subject, rdf::type_, owl_named_individual)?;
+        if !inst.anonymous {
+            triple(graph, subject, rdf::type_, owl_named_individual)?;
+        }
         for class_name in &inst.types {
             if let Some(class_def) = schema.classes.get(class_name) {
                 let class_iri = make_iri(&class_iri_string(class_name, class_def, schema))?;
-                triple(graph, &subject, rdf::type_, &class_iri)?;
+                triple(graph, subject, rdf::type_, &class_iri)?;
             }
         }
-        if !inst.label.is_empty() {
-            triple(graph, &subject, rdfs::label, inst.label.as_str())?;
+        if !inst.anonymous && !inst.label.is_empty() {
+            triple(graph, subject, rdfs::label, inst.label.as_str())?;
         }
 
         for sv in &inst.slot_values {
@@ -836,7 +908,7 @@ fn emit_instances(
                         enum_value_iri(enum_name, enum_def, &authored, schema)
                     {
                         let object = make_iri(&value_iri_str)?;
-                        triple(graph, &subject, &predicate, &object)?;
+                        triple(graph, subject, &predicate, &object)?;
                         continue;
                     }
                     // A value the enum doesn't permit: keep it as authored so
@@ -852,7 +924,7 @@ fn emit_instances(
                     // to, derived from the same table (`xsd_datatype`).
                     triple(
                         graph,
-                        &subject,
+                        subject,
                         &predicate,
                         typed_literal(&lexical, datatype),
                     )?;
@@ -864,10 +936,10 @@ fn emit_instances(
                 // output for the shapes and the conformance check to report,
                 // with nothing invented and nothing dropped.
                 match scalar {
-                    ScalarValue::String(s) => graph.insert(&subject, &predicate, s.as_str()),
-                    ScalarValue::Boolean(b) => graph.insert(&subject, &predicate, *b),
-                    ScalarValue::Float(f) => graph.insert(&subject, &predicate, *f),
-                    ScalarValue::Integer(i) => graph.insert(&subject, &predicate, *i as isize),
+                    ScalarValue::String(s) => graph.insert(subject, &predicate, s.as_str()),
+                    ScalarValue::Boolean(b) => graph.insert(subject, &predicate, *b),
+                    ScalarValue::Float(f) => graph.insert(subject, &predicate, *f),
+                    ScalarValue::Integer(i) => graph.insert(subject, &predicate, *i as isize),
                 }
                 .map_err(|e| IoError::Write(e.to_string()))?;
             }
@@ -876,12 +948,15 @@ fn emit_instances(
         for reference in &inst.references {
             let slot_def = effective_slot(&inst.types, &reference.property);
             let predicate = instance_predicate(&reference.property, slot_def.as_ref(), schema)?;
-            let target_iri_str = iri_by_id
-                .get(reference.target.as_str())
-                .cloned()
-                .unwrap_or_else(|| resolve_reference_iri(schema, &reference.target));
-            let target = make_iri(&target_iri_str)?;
-            triple(graph, &subject, &predicate, &target)?;
+            let minted;
+            let target = match node_by_id.get(reference.target.as_str()) {
+                Some(node) => node,
+                None => {
+                    minted = iri_term(&resolve_reference_iri(schema, &reference.target))?;
+                    &minted
+                }
+            };
+            triple(graph, subject, &predicate, target)?;
         }
     }
     Ok(())
@@ -2772,6 +2847,224 @@ mod tests {
         }
     }
 
+    /// `data` read against the depot schema, whose `Stamp` and `Size`
+    /// declare no identifier or key.
+    fn depot_abox(data: &str) -> (SchemaDefinition, crate::instances::InstanceSet) {
+        let mut schema: SchemaDefinition = serde_norway::from_str(include_str!(
+            "../../panschema-model/tests/fixtures/depot.yaml"
+        ))
+        .expect("schema");
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        let data: serde_norway::Value = serde_norway::from_str(data).expect("data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        (schema, set)
+    }
+
+    /// The N-Triples of `schema` with `set` as its A-box.
+    fn ntriples(
+        schema: &SchemaDefinition,
+        set: crate::instances::InstanceSet,
+        dataset: Option<DatasetDescription>,
+    ) -> String {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let path = temp_dir.path().join("out.nt");
+        NTriplesWriter::new()
+            .with_instances(set)
+            .with_dataset(dataset)
+            .write(schema, &path)
+            .expect("write");
+        fs::read_to_string(&path).expect("read")
+    }
+
+    fn depot_ntriples(data: &str, dataset: Option<DatasetDescription>) -> String {
+        let (schema, set) = depot_abox(data);
+        ntriples(&schema, set, dataset)
+    }
+
+    /// What each RDF writer writes for `schema` with `set` as its A-box:
+    /// the file's name, its text, and an independent store loaded from
+    /// it, so a claim is about the graph a reader gets, whatever the
+    /// syntax spells.
+    fn each_rdf_serialization(
+        schema: &SchemaDefinition,
+        set: &crate::instances::InstanceSet,
+        dataset: Option<DatasetDescription>,
+    ) -> Vec<(&'static str, String, oxigraph::store::Store)> {
+        use oxigraph::io::RdfFormat;
+        let writers: [(Box<dyn Writer>, &str, RdfFormat); 4] = [
+            (
+                Box::new(
+                    crate::owl_writer::OwlWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(dataset.clone()),
+                ),
+                "out.ttl",
+                RdfFormat::Turtle,
+            ),
+            (
+                Box::new(
+                    JsonLdWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(dataset.clone()),
+                ),
+                "out.jsonld",
+                RdfFormat::JsonLd {
+                    profile: oxigraph::io::JsonLdProfileSet::empty(),
+                },
+            ),
+            (
+                Box::new(
+                    RdfXmlWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(dataset.clone()),
+                ),
+                "out.rdf",
+                RdfFormat::RdfXml,
+            ),
+            (
+                Box::new(
+                    NTriplesWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(dataset),
+                ),
+                "out.nt",
+                RdfFormat::NTriples,
+            ),
+        ];
+        let temp_dir = TempDir::new().expect("temp dir");
+        writers
+            .into_iter()
+            .map(|(writer, name, format)| {
+                let path = temp_dir.path().join(name);
+                writer.write(schema, &path).expect("write");
+                let content = fs::read_to_string(&path).expect("read");
+                let store = oracle::load(format, &content);
+                (name, content, store)
+            })
+            .collect()
+    }
+
+    const DEPOT: &str = "https://example.org/depot/";
+
+    #[test]
+    fn each_rdf_writer_makes_a_record_with_no_identifier_a_blank_node() {
+        let (schema, set) = depot_abox(
+            "parcels:\n  - id: p1\n    stamps:\n      - {name: north, size: {width: 4}}\n",
+        );
+        let held = format!(
+            "ASK {{ <{DEPOT}p1> <{DEPOT}stamps> ?stamp . \
+             ?stamp a <{DEPOT}Stamp> ; <{DEPOT}name> \"north\" ; <{DEPOT}size> ?size . \
+             ?size a <{DEPOT}Size> ; <{DEPOT}width> 4 . \
+             FILTER(isBlank(?stamp) && isBlank(?size) && ?stamp != ?size) }}"
+        );
+        let named = format!(
+            "ASK {{ ?record a ?class . \
+             FILTER(?class IN (<{DEPOT}Stamp>, <{DEPOT}Size>) && isIRI(?record)) }}"
+        );
+        let asserted_a_name = format!(
+            "ASK {{ ?record ?says ?name . FILTER(isBlank(?record) && \
+             (?says = <{RDFS_NS}label> || ?name = <{OWL_NS}NamedIndividual>)) }}"
+        );
+        for (name, content, store) in each_rdf_serialization(&schema, &set, None) {
+            assert!(
+                oracle::ask(&store, &held),
+                "{name}: the parcel holds a blank stamp holding another blank node, its size; \
+                 got:\n{content}"
+            );
+            assert!(
+                !oracle::ask(&store, &named),
+                "{name}: a stamp or a size was given an IRI; got:\n{content}"
+            );
+            assert!(
+                !oracle::ask(&store, &asserted_a_name),
+                "{name}: a blank node is labeled or typed a named individual; got:\n{content}"
+            );
+        }
+    }
+
+    /// Both datasets hold a stamp at `stamps[0]`. Concatenated N-Triples
+    /// share blank-node labels across what were two documents, so a label
+    /// spelled from the place alone would make the two stamps one node
+    /// with both sizes.
+    #[test]
+    fn anonymous_records_of_two_datasets_stay_apart_when_concatenated() {
+        let combined = [3, 4]
+            .map(|width| {
+                depot_ntriples(
+                    &format!("stamps:\n  - {{name: north, size: {{width: {width}}}}}\n"),
+                    None,
+                )
+            })
+            .concat();
+        let store = oracle::load(oxigraph::io::RdfFormat::NTriples, &combined);
+        let two_stamps = format!(
+            "ASK {{ ?a <{DEPOT}size>/<{DEPOT}width> 3 . ?b <{DEPOT}size>/<{DEPOT}width> 4 . \
+             FILTER(?a != ?b) }}"
+        );
+        assert!(
+            oracle::ask(&store, &two_stamps),
+            "each dataset keeps its own stamp; got:\n{combined}"
+        );
+        let merged = format!("ASK {{ ?stamp <{DEPOT}size> ?a, ?b . FILTER(?a != ?b) }}");
+        assert!(
+            !oracle::ask(&store, &merged),
+            "one stamp holds both sizes; got:\n{combined}"
+        );
+    }
+
+    #[test]
+    fn a_rerun_spells_the_same_blank_nodes() {
+        let data = "stamps:\n  - {name: north, size: {width: 3}}\n";
+        assert_eq!(depot_ntriples(data, None), depot_ntriples(data, None));
+    }
+
+    /// The same records under two names are two datasets, so what the
+    /// records say cannot be what tells their blank nodes apart.
+    #[test]
+    fn two_described_datasets_holding_the_same_records_stay_apart_when_concatenated() {
+        let combined = ["worked-example", "benchmark"]
+            .map(|identifier| {
+                depot_ntriples(
+                    "stamps:\n  - {name: north}\n",
+                    Some(DatasetDescription {
+                        identifier: identifier.to_string(),
+                        ..worked_example()
+                    }),
+                )
+            })
+            .concat();
+        let store = oracle::load(oxigraph::io::RdfFormat::NTriples, &combined);
+        let two_stamps =
+            format!("ASK {{ ?a a <{DEPOT}Stamp> . ?b a <{DEPOT}Stamp> . FILTER(?a != ?b) }}");
+        assert!(
+            oracle::ask(&store, &two_stamps),
+            "the two datasets' stamps are one node; got:\n{combined}"
+        );
+    }
+
+    #[test]
+    fn a_described_datasets_blank_nodes_keep_their_labels_when_another_record_changes() {
+        let before = depot_ntriples("stamps:\n  - {name: north}\n", Some(worked_example()));
+        let after = depot_ntriples(
+            "stamps:\n  - {name: north}\n  - {name: south}\n",
+            Some(worked_example()),
+        );
+        let north: Vec<&str> = before
+            .lines()
+            .filter(|line| line.starts_with("_:record-"))
+            .collect();
+        assert!(
+            !north.is_empty(),
+            "the stamp is a blank node; got:\n{before}"
+        );
+        for line in north {
+            assert!(
+                after.contains(line),
+                "adding a stamp relabeled the first one: `{line}` is gone from:\n{after}"
+            );
+        }
+    }
+
     fn worked_example() -> DatasetDescription {
         DatasetDescription {
             identifier: "worked-example".to_string(),
@@ -2814,62 +3107,15 @@ mod tests {
             .count()
     }
 
-    /// Each serialization is loaded by an independent store and queried, so
-    /// the claim is the graph a reader gets, whatever the syntax spells.
     #[test]
     fn each_rdf_writer_with_a_dataset_names_it() {
-        use oxigraph::io::RdfFormat;
         let (schema, set) = abox_fixture();
-        let temp_dir = TempDir::new().expect("temp dir");
-        let writers: [(Box<dyn Writer>, &str, RdfFormat); 4] = [
-            (
-                Box::new(
-                    crate::owl_writer::OwlWriter::new()
-                        .with_instances(set.clone())
-                        .with_dataset(Some(worked_example())),
-                ),
-                "out.ttl",
-                RdfFormat::Turtle,
-            ),
-            (
-                Box::new(
-                    JsonLdWriter::new()
-                        .with_instances(set.clone())
-                        .with_dataset(Some(worked_example())),
-                ),
-                "out.jsonld",
-                RdfFormat::JsonLd {
-                    profile: oxigraph::io::JsonLdProfileSet::empty(),
-                },
-            ),
-            (
-                Box::new(
-                    RdfXmlWriter::new()
-                        .with_instances(set.clone())
-                        .with_dataset(Some(worked_example())),
-                ),
-                "out.rdf",
-                RdfFormat::RdfXml,
-            ),
-            (
-                Box::new(
-                    NTriplesWriter::new()
-                        .with_instances(set.clone())
-                        .with_dataset(Some(worked_example())),
-                ),
-                "out.nt",
-                RdfFormat::NTriples,
-            ),
-        ];
         let query = format!(
             "ASK {{ ?d a <{DCAT_NS}Dataset> ; <{DCTERMS_NS}identifier> \"worked-example\" ; \
              <{DCAT_NS}version> \"0.2.1\" ; <{DCTERMS_NS}conformsTo> <https://example.org/cellar> }}"
         );
-        for (writer, name, format) in writers {
-            let path = temp_dir.path().join(name);
-            writer.write(&schema, &path).expect("write");
-            let content = fs::read_to_string(&path).expect("read");
-            let store = oracle::load(format, &content);
+        for (name, content, store) in each_rdf_serialization(&schema, &set, Some(worked_example()))
+        {
             assert!(
                 oracle::ask(&store, &query),
                 "{name} must name its dataset; got:\n{content}"
@@ -2884,20 +3130,15 @@ mod tests {
     #[test]
     fn two_datasets_concatenated_stay_two_nodes() {
         let (schema, set) = abox_fixture();
-        let temp_dir = TempDir::new().expect("temp dir");
-        let mut combined = String::new();
-        for identifier in ["worked-example", "benchmark"] {
-            let path = temp_dir.path().join(format!("{identifier}.nt"));
-            NTriplesWriter::new()
-                .with_instances(set.clone())
-                .with_dataset(Some(DatasetDescription {
+        let combined = ["worked-example", "benchmark"]
+            .map(|identifier| {
+                let dataset = DatasetDescription {
                     identifier: identifier.to_string(),
                     ..worked_example()
-                }))
-                .write(&schema, &path)
-                .expect("write");
-            combined.push_str(&fs::read_to_string(&path).expect("read"));
-        }
+                };
+                ntriples(&schema, set.clone(), Some(dataset))
+            })
+            .concat();
         let store = oracle::load(oxigraph::io::RdfFormat::NTriples, &combined);
         let merged =
             format!("ASK {{ ?d <{DCTERMS_NS}identifier> \"worked-example\", \"benchmark\" }}");

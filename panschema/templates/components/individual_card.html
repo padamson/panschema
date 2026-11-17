@@ -2,17 +2,22 @@
     <header class="entity-header">
         <div class="entity-badge individual-badge">Instance</div>
         <h3 class="entity-title">{{ label }}</h3>
+{#- A record the data gives no identifier has no IRI to show or copy. #}
+{%- if let Some(iri) = iri %}
         <button class="copy-btn" data-copy="{{ iri }}" title="Copy IRI">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
         </button>
+{%- endif %}
     </header>
+{%- if let Some(iri) = iri %}
 
     <div class="entity-iri">
         <code class="mono">{{ iri }}</code>
     </div>
+{%- endif %}
 {%- if let Some(desc) = description %}
 
     <div class="entity-description">{{ desc|safe }}</div>

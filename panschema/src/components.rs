@@ -306,7 +306,8 @@ pub struct IndividualCardComponent<'a> {
     pub anchor_prefix: &'a str,
     pub id: &'a str,
     pub label: &'a str,
-    pub iri: &'a str,
+    /// `None` renders the card of a record with no identifier.
+    pub iri: Option<&'a str>,
     pub description: Option<&'a str>,
     pub types: &'a [EntityRef],
     pub property_values: &'a [PropertyValueSpec],
@@ -624,7 +625,7 @@ impl ComponentRenderer {
     pub fn individual_card(
         id: &str,
         label: &str,
-        iri: &str,
+        iri: Option<&str>,
         description: Option<&str>,
         types: &[EntityRef],
         property_values: &[PropertyValueSpec],

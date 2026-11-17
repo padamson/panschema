@@ -3,7 +3,7 @@ name: panschema-usage
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.5.20"
+  version: "0.5.21"
 ---
 
 # panschema
@@ -86,6 +86,16 @@ it the scope; a root without one is a vessel and nothing scopes. To share a
 record across datasets, put it in its own dataset with an `identifier` —
 optionally a **CURIE id** (`id: catalog:aws`) to mint it into a shared
 namespace — and reference it from the others.
+
+**A class with neither flag has records with no identity.** A value object
+(a size, a dataset at a version) declares no `identifier` and no `key`, is
+held inline wherever it is used, and cannot be referenced. Its records are
+blank nodes in the RDF outputs, with no IRI and no `rdfs:label`, as in
+LinkML's own RDF, and two of them are never merged, whatever their slots
+say. A finding names one by where it sits: `p1.stamps[0]` is the first
+entry (counting from 0) of `stamps` on the record `p1`. Do not add a `key`
+only to give such a record a name; a key puts it in the dataset's id scope,
+where it can collide with a record of another class.
 
 **When record classes share one `id` slot, put neither flag on the slot.**
 Set `identifier: true` or `key: true` per class through `slot_usage`, or

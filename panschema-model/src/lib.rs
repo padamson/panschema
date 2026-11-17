@@ -56,13 +56,16 @@
 //!     eprintln!("warning: {warning}");
 //! }
 //! for record in &loaded.instances.instances {
-//!     println!("{}", instance_iri_string(&loaded.schema, record));
+//!     // A record the data gives no identifier has no IRI.
+//!     if let Some(iri) = instance_iri_string(&loaded.schema, record) {
+//!         println!("{iri}");
+//!     }
 //! }
 //! # let iris: Vec<String> = loaded
 //! #     .instances
 //! #     .instances
 //! #     .iter()
-//! #     .map(|record| instance_iri_string(&loaded.schema, record))
+//! #     .filter_map(|record| instance_iri_string(&loaded.schema, record))
 //! #     .collect();
 //! # assert_eq!(iris, ["https://example.org/catalog/chateauMorgon"]);
 //! # Ok(())

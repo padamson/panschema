@@ -124,7 +124,7 @@
 {%- for ind in ds.individual_data %}
                 {%- let id = ind.id.as_str() %}
                 {%- let label = ind.label.as_str() %}
-                {%- let iri = ind.iri.as_str() %}
+                {%- let iri = ind.iri.as_deref() %}
                 {%- let description = ind.description.as_deref() %}
                 {%- let types = ind.types.as_slice() %}
                 {%- let property_values = ind.property_values.as_slice() %}

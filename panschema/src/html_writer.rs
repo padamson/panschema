@@ -467,7 +467,8 @@ pub struct PropertyValueData {
 pub struct IndividualData {
     pub id: String,
     pub label: String,
-    pub iri: String,
+    /// `None` for a record the data gives no identifier.
+    pub iri: Option<String>,
     pub description: Option<String>,
     pub types: Vec<EntityRef>,
     pub property_values: Vec<PropertyValueData>,
@@ -5520,6 +5521,58 @@ mod tests {
         assert!(
             !html.contains("href=\"#instance-graph\""),
             "the sidebar should not offer an Instances group for an empty A-box"
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_identifier_gets_a_card_without_an_iri() {
+        use crate::linkml::{ClassDefinition, SlotDefinition};
+        let mut schema = bottle_rack_schema();
+        let mut note = ClassDefinition::new("Note");
+        let mut text = SlotDefinition::new("text");
+        text.range = Some("string".to_string());
+        note.attributes.insert("text".to_string(), text);
+        schema.classes.insert("Note".to_string(), note);
+        let mut notes = SlotDefinition::new("notes");
+        notes.range = Some("Note".to_string());
+        notes.multivalued = true;
+        schema
+            .classes
+            .get_mut("Bottle")
+            .unwrap()
+            .attributes
+            .insert("notes".to_string(), notes);
+        let set = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b1\n    notes:\n      - {text: earthy}\n",
+        );
+
+        let (_, cards) = HtmlWriter::build_individual_data(&schema, &set);
+        let has_iri: Vec<(&str, bool)> = cards
+            .iter()
+            .map(|card| (card.id.as_str(), card.iri.is_some()))
+            .collect();
+        assert_eq!(has_iri, vec![("b1", true), ("b1.notes[0]", false)]);
+
+        let writer = HtmlWriter::with_options(false)
+            .with_instance_dataset(InstanceDataset::new("only", set));
+        let html = render_index(&writer, &schema);
+        let iri_parts = |id: &str| {
+            let card = card(&html, &format!("ind-{id}"));
+            (
+                card.matches(r#"class="entity-iri""#).count(),
+                card.matches(r#"class="copy-btn""#).count(),
+            )
+        };
+        assert_eq!(
+            iri_parts("b1"),
+            (1, 1),
+            "an identified record shows its IRI"
+        );
+        assert_eq!(
+            iri_parts("b1.notes[0]"),
+            (0, 0),
+            "nothing to show or copy for a record with no IRI"
         );
     }
 

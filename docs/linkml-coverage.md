@@ -329,6 +329,26 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    lose those records. Reading permissively is defensible; not reading
    SimpleDict is a gap.
 
+5. ~~**A record with no identifier was given one.**~~ **Resolved
+   2026-11-17:** a record whose class declares neither an `identifier` nor
+   a `key`, or that omits the value, has no IRI. The RDF writers emit it as
+   a blank node typed by its class, with no `owl:NamedIndividual` and no
+   `rdfs:label`, as `linkml-convert` does
+   (`conformance/probe_anonymous_records.py`); the HTML card and the graph
+   node carry no IRI; two such records are never one record; and a finding
+   names it by its place in the data (`p1.stamps[0]`, entries counted from
+   0 as the reference validator's paths count them). A dict spelling of
+   such records, which the reference validator rejects, loads the records
+   and `verify` reports each key, since the class has no identifier for it
+   to be. **Still lenient:** an authored string that spells a record's
+   place resolves to that record. Original finding: such a record was
+   named by a slot called `name`, `label` or `title`, or else
+   `<Class>-<n>` by its count in the file, and minted as a named individual
+   at that name in the schema's namespace. The first such record of every
+   dataset shared one IRI, so two datasets merged them in a combined graph,
+   and two records sharing a `name` were a "duplicate identifier" with the
+   second dropped.
+
 Confirmed conforming, for the record: declared `class_uri`/`slot_uri` are
 honored and CURIE-expanded; bare instance ids resolve via `default_prefix`
 and CURIE ids via declared prefixes, exactly the documented identifier

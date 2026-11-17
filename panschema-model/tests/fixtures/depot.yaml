@@ -1,0 +1,37 @@
+# A depot of parcels. A parcel carries an identifier and a tag a key, so
+# their records are individuals; a stamp and a size declare neither, so
+# their records can only be held inline and have no identity. The root
+# is a record when the data authors its `id`, and a vessel otherwise.
+id: https://example.org/depot
+name: depot
+prefixes:
+  depot: https://example.org/depot/
+default_prefix: depot
+default_range: string
+classes:
+  Depot:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      parcels: {range: Parcel, multivalued: true, inlined_as_list: true}
+      stamps: {range: Stamp, multivalued: true}
+      size: {range: Size}
+      either: {any_of: [{range: Stamp}, {range: Size}]}
+      tags: {range: Tag, multivalued: true}
+  Parcel:
+    attributes:
+      id: {identifier: true}
+      stamps: {range: Stamp, multivalued: true}
+      size: {range: Size}
+  Stamp:
+    attributes:
+      name: {}
+      value: {range: integer}
+      size: {range: Size}
+  Size:
+    attributes:
+      width: {range: integer}
+  Tag:
+    attributes:
+      code: {key: true}
+      note: {}

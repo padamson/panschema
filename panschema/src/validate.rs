@@ -22,8 +22,8 @@ use std::fmt;
 /// A single way the data fails to conform to the schema.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Violation {
-    /// The offending record's identifier, or a positional label when it has no
-    /// identifier (e.g. ``Wine#2``), or `(root)` for the dataset itself.
+    /// The offending record's identifier, or its place in the data when it
+    /// has none (`p1.stamps[1]`), or `(root)` for the dataset itself.
     pub record: String,
     /// Which check failed, carrying what it found.
     pub kind: ViolationKind,
@@ -1191,7 +1191,7 @@ fn numeric_value(value: &InstanceValue) -> Option<f64> {
 /// A value's display form for violation messages — the scalar's display
 /// or a reference's target id. Display only: values compare through
 /// [`values_match`] so kinds stay distinct even when displays collide.
-fn value_display(value: &InstanceValue) -> String {
+pub(crate) fn value_display(value: &InstanceValue) -> String {
     match value {
         InstanceValue::Scalar(s) => scalar_to_display(s),
         InstanceValue::Reference { target, .. } => target.clone(),
@@ -1989,6 +1989,75 @@ wineries:
 ",
         );
         assert!(validate_instance_data(&schema, &d).is_empty());
+    }
+
+    /// The violations of `yaml` against the depot schema, whose `Stamp`
+    /// declares no identifier or key, with its `value` made required.
+    fn depot_violations(yaml: &str) -> Vec<Violation> {
+        let mut schema: SchemaDefinition = serde_norway::from_str(include_str!(
+            "../../panschema-model/tests/fixtures/depot.yaml"
+        ))
+        .expect("parse schema");
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        let stamp = schema.classes.get_mut("Stamp").expect("Stamp");
+        stamp.attributes.get_mut("value").expect("value").required = true;
+        validate_instance_data(&schema, &data(yaml))
+    }
+
+    #[test]
+    fn records_with_no_identifier_sharing_a_name_are_not_duplicates() {
+        let v = depot_violations(
+            "\
+parcels:
+  - id: p1
+    stamps:
+      - {name: north, value: 1}
+      - {name: north, value: 2}
+",
+        );
+        assert_eq!(v, vec![], "a name is not an identifier to duplicate");
+    }
+
+    #[test]
+    fn a_violation_on_a_record_with_no_identifier_names_its_place() {
+        let v = depot_violations(
+            "\
+parcels:
+  - id: p1
+    stamps:
+      - {name: north, value: 1}
+      - {name: north}
+",
+        );
+        assert_eq!(
+            v,
+            vec![Violation {
+                record: "p1.stamps[1]".to_string(),
+                kind: ViolationKind::RequiredSlotAbsent {
+                    class: "Stamp".to_string(),
+                    slot: "value".to_string(),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn a_name_does_not_stand_in_for_a_record_with_no_identifier() {
+        let v = depot_violations(
+            "\
+parcels:
+  - id: p1
+    stamps: [{name: north, value: 1}]
+  - id: p2
+    stamps: [north]
+",
+        );
+        assert!(
+            matches!(v.as_slice(), [one] if one.record == "p2"
+                && matches!(&one.kind, ViolationKind::DanglingReference(d) if d.target == "north")),
+            "`north` names no record, as in LinkML, where a string cannot stand \
+             where such a record belongs; got: {v:?}"
+        );
     }
 
     #[test]

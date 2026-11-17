@@ -166,7 +166,7 @@ pub struct SlotValue {
     pub values: Vec<InstanceValue>,
 }
 
-/// One A-box instance: a typed record identified by `id`.
+/// One A-box instance: a typed record, found in its dataset by `id`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instance {
     pub id: String,
@@ -194,6 +194,12 @@ pub struct Instance {
     /// never written back to it, so already-authored files need no rework.
     /// `None` for a vessel-rooted dataset, which mints as it always has.
     pub scope: Option<String>,
+    /// `true` for a record the data gives no identity: its class declares
+    /// no `identifier` or `key`, or the record omits the value. `id` is
+    /// then its place in the data (`p1.stamps[0]`), unique within the
+    /// dataset and stable only while the data keeps its order. Such a
+    /// record has no IRI and is never the same individual as another.
+    pub anonymous: bool,
 }
 
 /// Why a union-ranged entry chose no member, phrased to follow
@@ -228,6 +234,35 @@ const WRAPPED_DICT_REASON: &str = "reads as an identifier-keyed dict of records,
 fn field_named_key_reason(key: &str) -> String {
     format!(
         "is named like a field of the range (`{key}`), not a record id — wrap records in a list"
+    )
+}
+
+/// Whether a reference to `target` points outside the dataset being
+/// read. A record named by its place is the dataset's own, whatever
+/// prefix the record holding it gave that place.
+fn leaves_dataset(
+    schema: &SchemaDefinition,
+    anonymous_ids: &std::collections::HashSet<String>,
+    target: &str,
+) -> bool {
+    points_outside_dataset(schema, target) && !anonymous_ids.contains(target)
+}
+
+/// The place of `slot`'s value: on the record `holder`, or on a vessel
+/// root, which has no id to place it under.
+fn place_in(holder: Option<&str>, slot: &str) -> String {
+    match holder {
+        Some(holder) => format!("{holder}.{slot}"),
+        None => slot.to_string(),
+    }
+}
+
+/// Why a keyed entry of a class with no identifier or key loads without
+/// its key, phrased to follow "entry `k` …".
+fn keyless_reason(class: &str) -> String {
+    format!(
+        "is keyed, but `{class}` declares no identifier or key for the key to be; the \
+         record loads without it — wrap records in a list"
     )
 }
 
@@ -486,6 +521,7 @@ impl InstanceSet {
                 // ADR-008 ("uneven reader coverage").
                 slot_values: Vec::new(),
                 scope: None,
+                anonymous: false,
             });
         }
 
@@ -563,6 +599,8 @@ impl InstanceSet {
             unusable_entries: Vec::new(),
             undeclared_inlinings: std::collections::BTreeMap::new(),
             current_holder: None,
+            place: String::new(),
+            anonymous_ids: std::collections::HashSet::new(),
             family_by_class: std::collections::BTreeMap::new(),
         };
         // The container's authored identifier value, when its declared
@@ -648,6 +686,7 @@ impl InstanceSet {
             // the record builder like any record's values, and shows in
             // the metadata as the joined list.
             let multivalued = crate::linkml_resolve::effective_cardinality(slot).multivalued;
+            loader.place = place_in(authored_root_id.as_deref(), slot_name);
             if is_record_collection(multivalued, &class_targets, all_classes) {
                 // A collection holds its records by role, however each
                 // entry is spelled; a union of classes chooses each entry's
@@ -768,7 +807,7 @@ impl InstanceSet {
                                 inst.references.push(Reference {
                                     property: slot.clone(),
                                     target: id.clone(),
-                                    external: points_outside_dataset(schema, id),
+                                    external: leaves_dataset(schema, &loader.anonymous_ids, id),
                                 });
                                 push_slot_value(
                                     &mut inst.slot_values,
@@ -798,8 +837,8 @@ impl InstanceSet {
         // one individual. A vessel root yields no scope at all.
         if let Some(root_id) = &emitted_root_id
             && let Some(root_inst) = loader.instances.iter().find(|i| &i.id == root_id)
+            && let Some(scope) = instance_iri_string(schema, root_inst)
         {
-            let scope = instance_iri_string(schema, root_inst);
             // Read from the same cached slots `build_record` named each
             // record from, so a record is scoped by the slot that named it.
             let classes: std::collections::BTreeSet<String> = loader
@@ -810,11 +849,9 @@ impl InstanceSet {
             let named_by_key: std::collections::BTreeSet<String> = classes
                 .into_iter()
                 .filter(|class_name| {
-                    let slots = loader.resolved_slots(class_name);
-                    crate::linkml_resolve::record_id_slot(
-                        slots.iter().map(|(name, rs)| (name, &rs.definition)),
-                    )
-                    .is_some_and(|(_, slot)| !slot.identifier)
+                    loader
+                        .id_slot(class_name)
+                        .is_some_and(|(_, identifier)| !identifier)
                 })
                 .collect();
             for inst in &mut loader.instances {
@@ -822,7 +859,9 @@ impl InstanceSet {
                     .types
                     .first()
                     .is_some_and(|class_name| named_by_key.contains(class_name));
-                if keyed && &inst.id != root_id {
+                // A record that omits its key is named by its place, which
+                // is nothing to mint beneath the root.
+                if keyed && !inst.anonymous && &inst.id != root_id {
                     inst.scope = Some(scope.clone());
                 }
             }
@@ -1038,6 +1077,13 @@ struct LinkmlLoader<'a> {
     /// raised below it can name its holder; `None` between records — a
     /// collection on the dataset container or a vessel root.
     current_holder: Option<String>,
+    /// Where the value being read sits in the data: the id of the record
+    /// holding it (none under a vessel root), the slot, then `[n]` for
+    /// entry `n` of a list or a dict. A record the data gives no
+    /// identifier is named by it.
+    place: String,
+    /// The ids of the records named by their place.
+    anonymous_ids: std::collections::HashSet<String>,
     /// Per class, the classes its type designator may name — itself and
     /// its `is_a` descendants — built once for the IRI/CURIE spellings;
     /// bare names answer without it.
@@ -1045,6 +1091,31 @@ struct LinkmlLoader<'a> {
 }
 
 impl LinkmlLoader<'_> {
+    /// Read entry `index` of the value being read (a list, or a dict in
+    /// the order it was written), with `self.place` naming that entry for
+    /// as long as `read` runs.
+    fn at_entry<T>(&mut self, index: usize, read: impl FnOnce(&mut Self) -> T) -> T {
+        use std::fmt::Write as _;
+        let outer = self.place.len();
+        let _ = write!(self.place, "[{index}]");
+        let out = read(self);
+        self.place.truncate(outer);
+        out
+    }
+
+    fn leaves_dataset(&self, target: &str) -> bool {
+        leaves_dataset(self.schema, &self.anonymous_ids, target)
+    }
+
+    /// The slot that names `class_name`'s records, and whether it is an
+    /// `identifier` (unique everywhere) or only a `key` (unique within
+    /// the dataset). `None` when the class declares neither.
+    fn id_slot(&mut self, class_name: &str) -> Option<(String, bool)> {
+        let slots = self.resolved_slots(class_name);
+        crate::linkml_resolve::record_id_slot(slots.iter().map(|(name, rs)| (name, &rs.definition)))
+            .map(|(name, slot)| (name.clone(), slot.identifier))
+    }
+
     /// `class_name`'s effective slots with provenance, resolved once and
     /// cached; the returned handle stays valid across further loading.
     fn resolved_slots(
@@ -1623,8 +1694,10 @@ impl LinkmlLoader<'_> {
     ) {
         match value {
             serde_norway::Value::Sequence(items) => {
-                for item in items {
-                    self.collect_union_records(slot, candidates, item);
+                for (index, item) in items.iter().enumerate() {
+                    self.at_entry(index, |loader| {
+                        loader.collect_union_records(slot, candidates, item);
+                    });
                 }
             }
             serde_norway::Value::Mapping(map) => match self.disambiguate_class(candidates, map) {
@@ -1663,58 +1736,10 @@ impl LinkmlLoader<'_> {
         let mut ids = Vec::new();
         match value {
             serde_norway::Value::Sequence(items) => {
-                for item in items {
-                    match item {
-                        // A bare string is LinkML's non-inlined form: a
-                        // reference to a record by its identifier. Whether
-                        // it resolves is the integrity pass's question.
-                        serde_norway::Value::String(text) => ids.push((text.clone(), true)),
-                        // An authored arity mistake stays loadable rather
-                        // than vanishing behind its extra brackets.
-                        serde_norway::Value::Sequence(_) => {
-                            ids.extend(
-                                self.collect_collection(slot, slot_def, holder, candidates, item),
-                            );
-                        }
-                        serde_norway::Value::Mapping(map) => {
-                            match self.disambiguate_class(candidates, map) {
-                                ClassChoice::One(class) => {
-                                    if let Some((id, _)) = self.build_record(&class, None, item) {
-                                        self.note_top_level_id(id.clone());
-                                        ids.push((id, true));
-                                        self.note_inline_records(
-                                            holder.clone(),
-                                            slot_def,
-                                            slot,
-                                            candidates,
-                                            1,
-                                        );
-                                    }
-                                }
-                                ClassChoice::Ambiguous => self.note_unusable(
-                                    slot,
-                                    None,
-                                    UNION_AMBIGUITY_REASON.to_string(),
-                                ),
-                                ClassChoice::WrappedDict => {
-                                    self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string())
-                                }
-                            }
-                        }
-                        serde_norway::Value::Null => self.note_unusable(
-                            slot,
-                            None,
-                            "is a null; a null names no record".to_string(),
-                        ),
-                        other => self.note_unusable(
-                            slot,
-                            None,
-                            format!(
-                                "is {}; a collection entry must be a record or an id string",
-                                yaml_kind(other)
-                            ),
-                        ),
-                    }
+                for (index, item) in items.iter().enumerate() {
+                    self.at_entry(index, |loader| {
+                        loader.collect_entry(slot, slot_def, holder, candidates, item, &mut ids);
+                    });
                 }
             }
             serde_norway::Value::Mapping(map) => {
@@ -1733,6 +1758,56 @@ impl LinkmlLoader<'_> {
         ids
     }
 
+    /// One entry of a container collection's list, its outcome pushed
+    /// onto `ids`.
+    fn collect_entry(
+        &mut self,
+        slot: &str,
+        slot_def: &crate::linkml::SlotDefinition,
+        holder: &Option<String>,
+        candidates: &[&String],
+        item: &serde_norway::Value,
+        ids: &mut Vec<(String, bool)>,
+    ) {
+        match item {
+            // A bare string is LinkML's non-inlined form: a
+            // reference to a record by its identifier. Whether
+            // it resolves is the integrity pass's question.
+            serde_norway::Value::String(text) => ids.push((text.clone(), true)),
+            // An authored arity mistake stays loadable rather
+            // than vanishing behind its extra brackets.
+            serde_norway::Value::Sequence(_) => {
+                ids.extend(self.collect_collection(slot, slot_def, holder, candidates, item));
+            }
+            serde_norway::Value::Mapping(map) => match self.disambiguate_class(candidates, map) {
+                ClassChoice::One(class) => {
+                    if let Some((id, _)) = self.build_record(&class, None, item) {
+                        self.note_top_level_id(id.clone());
+                        ids.push((id, true));
+                        self.note_inline_records(holder.clone(), slot_def, slot, candidates, 1);
+                    }
+                }
+                ClassChoice::Ambiguous => {
+                    self.note_unusable(slot, None, UNION_AMBIGUITY_REASON.to_string())
+                }
+                ClassChoice::WrappedDict => {
+                    self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string())
+                }
+            },
+            serde_norway::Value::Null => {
+                self.note_unusable(slot, None, "is a null; a null names no record".to_string())
+            }
+            other => self.note_unusable(
+                slot,
+                None,
+                format!(
+                    "is {}; a collection entry must be a record or an id string",
+                    yaml_kind(other)
+                ),
+            ),
+        }
+    }
+
     /// Build the records of a collection authored in a dict spelling — an
     /// identifier-keyed mapping of records, or the compact SimpleDict form.
     /// Returns each built record's id and whether this call materialized
@@ -1744,7 +1819,7 @@ impl LinkmlLoader<'_> {
         map: &serde_norway::Mapping,
     ) -> Vec<(String, bool)> {
         let mut ids = Vec::new();
-        for (key, record) in map {
+        for (index, (key, record)) in map.iter().enumerate() {
             let key_str = key.as_str();
             // A key that is a member's own slot name is almost
             // certainly an un-wrapped inline record, not an id —
@@ -1768,9 +1843,22 @@ impl LinkmlLoader<'_> {
                     }
                     match self.disambiguate_class(candidates, entry) {
                         ClassChoice::One(class) => {
-                            if let Some(built) = self.build_record(&class, key_str, record) {
-                                ids.push(built);
+                            // LinkML keys a dict of records by their
+                            // identifier, so a key on a class with none
+                            // is in no slot and reaches no output.
+                            if let Some(k) = key_str
+                                && self.id_slot(&class).is_none()
+                            {
+                                self.note_unusable(
+                                    slot,
+                                    Some(k.to_string()),
+                                    keyless_reason(&class),
+                                );
                             }
+                            let built = self.at_entry(index, |loader| {
+                                loader.build_record(&class, key_str, record)
+                            });
+                            ids.extend(built);
                         }
                         ClassChoice::Ambiguous => self.note_unusable(
                             slot,
@@ -1798,9 +1886,10 @@ impl LinkmlLoader<'_> {
                         );
                         continue;
                     };
-                    if let Some(built) = self.build_simple_dict_entry(slot, candidates, k, record) {
-                        ids.push(built);
-                    }
+                    let built = self.at_entry(index, |loader| {
+                        loader.build_simple_dict_entry(slot, candidates, k, record)
+                    });
+                    ids.extend(built);
                 }
             }
         }
@@ -1880,10 +1969,15 @@ impl LinkmlLoader<'_> {
         value: &serde_norway::Value,
     ) -> Vec<(String, bool)> {
         match value {
-            serde_norway::Value::Sequence(items) => items
-                .iter()
-                .flat_map(|item| self.collect_single(slot, slot_def, holder, class_name, item))
-                .collect(),
+            serde_norway::Value::Sequence(items) => {
+                let mut ids = Vec::new();
+                for (index, item) in items.iter().enumerate() {
+                    ids.extend(self.at_entry(index, |loader| {
+                        loader.collect_single(slot, slot_def, holder, class_name, item)
+                    }));
+                }
+                ids
+            }
             serde_norway::Value::Mapping(map) => {
                 // The class is fixed, but the shape still chooses: a
                 // mapping reading as an id-keyed dict is refused here
@@ -1922,7 +2016,8 @@ impl LinkmlLoader<'_> {
     /// materialized it — `false` when the id was already taken, so the caller
     /// is restating an existing record rather than holding a new one.
     /// `dict_key`, when present, is the record's identifier from an
-    /// identifier-keyed collection.
+    /// identifier-keyed collection. A record with no authored identifier
+    /// is named by `self.place`, which the caller set to where it sits.
     fn build_record(
         &mut self,
         class_name: &str,
@@ -1944,10 +2039,7 @@ impl LinkmlLoader<'_> {
 
         // A record is identified by its `identifier` slot or, failing that,
         // its `key` slot — LinkML's globally- and container-unique forms.
-        let id_slot = crate::linkml_resolve::record_id_slot(
-            resolved.iter().map(|(name, rs)| (name, &rs.definition)),
-        )
-        .map(|(name, _)| name.clone());
+        let id_slot = self.id_slot(class_name).map(|(name, _)| name);
         // A name/label/title slot supplies the display label, LinkML-conventionally.
         let label_slot = resolved
             .keys()
@@ -1960,12 +2052,35 @@ impl LinkmlLoader<'_> {
                 .map(str::to_string)
         };
 
-        let id = dict_key
-            .map(str::to_string)
-            .or_else(|| string_field(id_slot.as_deref()))
-            .or_else(|| string_field(label_slot.as_deref()))
-            .unwrap_or_else(|| format!("{class_name}-{}", self.instances.len() + 1));
-        let label = string_field(label_slot.as_deref()).unwrap_or_else(|| capitalize_first(&id));
+        // Only the class's identifier or key names a record. One whose
+        // class declares neither, or that omits the value, has no identity
+        // (LinkML's RDF makes it a blank node,
+        // `conformance/probe_anonymous_records.py`), and its handle is where
+        // it sits: a label is not an identifier, and a count of the records
+        // read so far is the same in every dataset.
+        let place = std::mem::take(&mut self.place);
+        let authored_id = id_slot.as_deref().and_then(|id_name| {
+            dict_key.map(str::to_string).or_else(|| {
+                map.get(id_name)
+                    .and_then(scalar_value)
+                    .map(|scalar| match scalar {
+                        ScalarValue::String(id) => id,
+                        other => scalar_to_display(&other),
+                    })
+            })
+        });
+        let anonymous = authored_id.is_none();
+        let id = authored_id.unwrap_or_else(|| place.clone());
+        if anonymous {
+            self.anonymous_ids.insert(id.clone());
+        }
+        let label = string_field(label_slot.as_deref()).unwrap_or_else(|| {
+            if anonymous {
+                id.clone()
+            } else {
+                capitalize_first(&id)
+            }
+        });
 
         let mut literals: Vec<(String, String)> = Vec::new();
         let mut references: Vec<Reference> = Vec::new();
@@ -2048,6 +2163,7 @@ impl LinkmlLoader<'_> {
                     resolved,
                 }
             });
+            self.place = place_in(Some(&id), field);
             self.ingest_field(
                 field,
                 &ranges,
@@ -2064,6 +2180,7 @@ impl LinkmlLoader<'_> {
         }
         self.expand_scope.pop();
         self.current_holder = previous_holder;
+        self.place = place;
         // An identifier supplied as an identifier-keyed collection's map key is
         // an authored value too — record it so a validator sees it present.
         if let (Some(key), Some(id_name)) = (dict_key, id_slot.as_deref())
@@ -2092,6 +2209,7 @@ impl LinkmlLoader<'_> {
                 slot_values,
                 // Set once the dataset's root is known, not here.
                 scope: None,
+                anonymous,
             });
         } else if let Some(existing) = self.instances.iter().find(|i| i.id == id) {
             // Restating an existing record is fine only when nothing is
@@ -2164,20 +2282,22 @@ impl LinkmlLoader<'_> {
             // them is a single record, never another dict collection —
             // the element that only reads as one is refused where every
             // mapping chooses its class, in `disambiguate_class`.
-            for item in items {
-                self.ingest_field(
-                    slot,
-                    ranges,
-                    false,
-                    property,
-                    item,
-                    display,
-                    expand,
-                    slot_def,
-                    literals,
-                    references,
-                    slot_values,
-                );
+            for (index, item) in items.iter().enumerate() {
+                self.at_entry(index, |loader| {
+                    loader.ingest_field(
+                        slot,
+                        ranges,
+                        false,
+                        property,
+                        item,
+                        display,
+                        expand,
+                        slot_def,
+                        literals,
+                        references,
+                        slot_values,
+                    );
+                });
             }
             return;
         }
@@ -2195,12 +2315,11 @@ impl LinkmlLoader<'_> {
             return;
         }
 
-        let schema = self.schema;
         let reference_to = |target: String,
                             held: bool,
+                            external: bool,
                             references: &mut Vec<Reference>,
                             slot_values: &mut Vec<SlotValue>| {
-            let external = points_outside_dataset(schema, &target);
             push_slot_value(
                 slot_values,
                 slot,
@@ -2259,7 +2378,8 @@ impl LinkmlLoader<'_> {
                     );
                 }
                 for (target, materialized) in entries {
-                    reference_to(target, materialized, references, slot_values);
+                    let external = self.leaves_dataset(&target);
+                    reference_to(target, materialized, external, references, slot_values);
                 }
             }
             // An inlined mapping is its own record; recurse and edge to it.
@@ -2284,7 +2404,8 @@ impl LinkmlLoader<'_> {
                                     ExpansionGapKind::InlineRecord,
                                 );
                             }
-                            reference_to(target, materialized, references, slot_values);
+                            let external = self.leaves_dataset(&target);
+                            reference_to(target, materialized, external, references, slot_values);
                         }
                     }
                     ClassChoice::Ambiguous => push_slot_value(
@@ -2315,7 +2436,8 @@ impl LinkmlLoader<'_> {
                 let target = self
                     .expand_bare(expand, slot, &record, text, true)
                     .unwrap_or_else(|| text.clone());
-                reference_to(target, false, references, slot_values);
+                let external = self.leaves_dataset(&target);
+                reference_to(target, false, external, references, slot_values);
             }
             // A number or boolean can never be a reference — record the
             // mismatch rather than dropping it, keeping the display
@@ -2461,12 +2583,18 @@ pub(crate) fn capitalize_first(id: &str) -> String {
 /// instance that already carries a resolved IRI (the OWL-sourced path) keeps
 /// it; otherwise the id mints against the schema's prefixes (default prefix
 /// for a bare id, any declared prefix for a CURIE id), falling back to
-/// `{ontology}#{id}` when no prefix resolves.
-pub fn instance_iri_string(schema: &SchemaDefinition, inst: &Instance) -> String {
+/// `{ontology}#{id}` when no prefix resolves. `None` for an
+/// [`anonymous`](Instance::anonymous) record: its id is a place in one
+/// dataset, and an IRI minted from it would name a different record in the
+/// next.
+pub fn instance_iri_string(schema: &SchemaDefinition, inst: &Instance) -> Option<String> {
+    if inst.anonymous {
+        return None;
+    }
     if let Some(iri) = &inst.iri
         && !inst.uri_unresolved
     {
-        return iri.clone();
+        return Some(iri.clone());
     }
     // A record named by CURIE or absolute IRI carries its own namespace — a
     // shared-vocabulary record, or one belonging to another graph — so its
@@ -2479,24 +2607,26 @@ pub fn instance_iri_string(schema: &SchemaDefinition, inst: &Instance) -> String
             .split_once(':')
             .is_some_and(|(prefix, _)| schema.prefixes.contains_key(prefix));
     if !names_its_own_namespace && let Some(scope) = &inst.scope {
-        return format!("{scope}/{}", inst.id);
+        return Some(format!("{scope}/{}", inst.id));
     }
-    crate::linkml_resolve::resolve_reference_iri(schema, &inst.id)
+    Some(crate::linkml_resolve::resolve_reference_iri(
+        schema, &inst.id,
+    ))
 }
 
-/// Every record's minted IRI keyed by its id, across `sets` — the map a
+/// Every identified record's minted IRI keyed by its id, across `sets` — the map a
 /// reference target resolves through before falling back to
 /// [`resolve_reference_iri`](crate::linkml_resolve::resolve_reference_iri),
-/// shared by the RDF emission and the
-/// cross-graph absence check so both prefer a record's real minted IRI
-/// (scoping included) over a fabricated expansion.
+/// so the cross-graph absence check prefers a record's real minted IRI
+/// (scoping included) over a fabricated expansion, as the RDF emission
+/// does.
 pub fn instance_iris_by_id<'a>(
     schema: &SchemaDefinition,
     sets: &'a [InstanceSet],
 ) -> std::collections::BTreeMap<&'a str, String> {
     sets.iter()
         .flat_map(|set| &set.instances)
-        .map(|i| (i.id.as_str(), instance_iri_string(schema, i)))
+        .filter_map(|i| Some((i.id.as_str(), instance_iri_string(schema, i)?)))
         .collect()
 }
 
@@ -4077,8 +4207,8 @@ classes:
             "identifier-identified records are globally unique, so they merge"
         );
         assert_eq!(
-            iri_of(&acme, "aws"),
-            "https://example.org/estate/aws",
+            iri_of(&acme, "aws").as_deref(),
+            Some("https://example.org/estate/aws"),
             "and the global record mints in the schema namespace, unscoped"
         );
     }
@@ -4098,10 +4228,13 @@ classes:
                 .expect("the deployment");
             instance_iri_string(&schema, inst)
         };
-        assert_eq!(iri_of(&acme), "https://example.org/estate/acme/api-gateway");
         assert_eq!(
-            iri_of(&contoso),
-            "https://example.org/estate/contoso/api-gateway"
+            iri_of(&acme).as_deref(),
+            Some("https://example.org/estate/acme/api-gateway")
+        );
+        assert_eq!(
+            iri_of(&contoso).as_deref(),
+            Some("https://example.org/estate/contoso/api-gateway")
         );
         assert_ne!(
             iri_of(&acme),
@@ -4129,8 +4262,8 @@ classes:
                 .find(|i| i.id == authored)
                 .unwrap_or_else(|| panic!("the record named {authored}"));
             assert_eq!(
-                instance_iri_string(&schema, inst),
-                authored,
+                instance_iri_string(&schema, inst).as_deref(),
+                Some(authored),
                 "an externally-grounded id is used as authored, not scoped \
                  beneath the dataset that mentions it"
             );
@@ -4147,8 +4280,8 @@ classes:
             .find(|i| i.id == "acme")
             .expect("the root record");
         assert_eq!(
-            instance_iri_string(&schema, root),
-            "https://example.org/estate/acme",
+            instance_iri_string(&schema, root).as_deref(),
+            Some("https://example.org/estate/acme"),
             "the root IS the scope, so it does not nest inside itself"
         );
     }
@@ -4185,8 +4318,8 @@ classes:
         let set = xref_set("providers:\n  - id: aws\n");
         let aws = set.instances.iter().find(|i| i.id == "aws").expect("aws");
         assert_eq!(
-            instance_iri_string(&schema, aws),
-            "https://example.org/estate/aws",
+            instance_iri_string(&schema, aws).as_deref(),
+            Some("https://example.org/estate/aws"),
             "a vessel root introduces no scope segment"
         );
     }
@@ -4205,8 +4338,8 @@ classes:
             .find(|i| i.id == "catalog:aws")
             .expect("the catalogue's provider");
         assert_eq!(
-            instance_iri_string(&schema, aws),
-            "https://example.org/catalog/aws",
+            instance_iri_string(&schema, aws).as_deref(),
+            Some("https://example.org/catalog/aws"),
             "a CURIE-named shared record mints into the shared namespace"
         );
     }
@@ -4225,8 +4358,8 @@ classes:
             .find(|i| i.id == "aws")
             .expect("the catalogue's provider");
         assert_eq!(
-            instance_iri_string(&schema, aws),
-            "https://example.org/estate/aws-catalog/aws",
+            instance_iri_string(&schema, aws).as_deref(),
+            Some("https://example.org/estate/aws-catalog/aws"),
             "a bare id scopes under its own dataset's root, NOT into the \
              shared namespace — so `catalog:aws` does not resolve to it"
         );
@@ -6562,6 +6695,246 @@ classes:
         assert_eq!(set.duplicate_ids, Vec::<String>::new());
     }
 
+    /// `yaml` read against the depot schema, whose `Stamp` and `Size`
+    /// declare no identifier or key.
+    fn depot_set(yaml: &str) -> (SchemaDefinition, InstanceSet) {
+        let schema: SchemaDefinition =
+            serde_norway::from_str(include_str!("../tests/fixtures/depot.yaml")).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(yaml).expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        (schema, set)
+    }
+
+    fn handles(set: &InstanceSet, anonymous: bool) -> Vec<&str> {
+        set.instances
+            .iter()
+            .filter(|i| i.anonymous == anonymous)
+            .map(|i| i.id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_record_with_no_identifier_is_anonymous_and_named_by_its_place() {
+        let (_, set) = depot_set(
+            "\
+parcels:
+  - id: p1
+    size: {width: 3}
+    stamps:
+      - {name: north, value: 1}
+      - {value: 2, size: {width: 4}}
+stamps:
+  - {name: loose}
+",
+        );
+        assert_eq!(handles(&set, false), vec!["p1"]);
+        assert_eq!(
+            handles(&set, true),
+            vec![
+                "p1.size",
+                "p1.stamps[0]",
+                "p1.stamps[1]",
+                "p1.stamps[1].size",
+                "stamps[0]",
+            ],
+            "a single value, list entries, a record nested in one, and a vessel root's own"
+        );
+        assert_eq!(set.duplicate_ids, Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_anonymous_record_is_placed_under_the_nearest_record_holding_it() {
+        let (_, set) = depot_set(
+            "\
+id: d1
+stamps:
+  - {name: loose}
+parcels:
+  - id: p1
+    stamps:
+      - {name: north}
+",
+        );
+        assert_eq!(handles(&set, true), vec!["d1.stamps[0]", "p1.stamps[0]"]);
+    }
+
+    #[test]
+    fn every_list_an_anonymous_record_sits_in_is_part_of_its_place() {
+        let (_, set) = depot_set(
+            "\
+size: [{width: 3}]
+either: [{width: 1}]
+stamps: [[{name: nested}]]
+",
+        );
+        assert_eq!(
+            handles(&set, true),
+            vec!["either[0]", "size[0]", "stamps[0][0]"],
+            "a single-valued slot authored as a list, a union slot, and a list in a list"
+        );
+    }
+
+    #[test]
+    fn an_anonymous_record_of_a_curie_named_holder_stays_in_the_dataset() {
+        let (_, set) = depot_set("parcels:\n  - {id: 'depot:p1', size: {width: 3}}\n");
+        assert_eq!(
+            find(&set, "depot:p1").references,
+            vec![Reference {
+                property: "size".to_string(),
+                target: "depot:p1.size".to_string(),
+                external: false,
+            }],
+            "the holder's prefix is part of the place, not a namespace the size lives in"
+        );
+        assert_eq!(set.external_references, Vec::new());
+    }
+
+    #[test]
+    fn a_record_that_omits_its_key_is_anonymous_and_unscoped() {
+        let (_, set) = depot_set("id: d1\ntags:\n  - {code: t1}\n  - {note: unkeyed}\n");
+        let scopes: Vec<(&str, bool, Option<&str>)> = set
+            .instances
+            .iter()
+            .filter(|i| i.types == ["Tag"])
+            .map(|i| (i.id.as_str(), i.anonymous, i.scope.as_deref()))
+            .collect();
+        assert_eq!(
+            scopes,
+            vec![
+                ("d1.tags[1]", true, None),
+                ("t1", false, Some("https://example.org/depot/d1")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_holder_references_its_anonymous_record_by_handle() {
+        let (_, set) = depot_set("parcels:\n  - {id: p1, size: {width: 3}}\n");
+        assert_eq!(
+            find(&set, "p1").slot_values,
+            vec![
+                SlotValue {
+                    slot: "id".to_string(),
+                    values: vec![InstanceValue::Scalar(ScalarValue::String("p1".to_string()))],
+                },
+                SlotValue {
+                    slot: "size".to_string(),
+                    values: vec![InstanceValue::Reference {
+                        target: "p1.size".to_string(),
+                        held: true,
+                    }],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn anonymous_records_sharing_a_name_stay_separate() {
+        let (_, set) = depot_set(
+            "\
+parcels:
+  - id: p1
+    stamps:
+      - {name: north, value: 1}
+      - {name: north, value: 2}
+",
+        );
+        let stamps: Vec<(&str, &str, Vec<&str>)> = set
+            .instances
+            .iter()
+            .filter(|i| i.anonymous)
+            .map(|i| {
+                let values = i.literals.iter().map(|(_, value)| value.as_str());
+                (i.id.as_str(), i.label.as_str(), values.collect())
+            })
+            .collect();
+        assert_eq!(
+            stamps,
+            vec![
+                ("p1.stamps[0]", "north", vec!["1"]),
+                ("p1.stamps[1]", "north", vec!["2"]),
+            ],
+            "the name is each record's label, not an identity the two share"
+        );
+        assert_eq!(
+            set.duplicate_ids,
+            Vec::<String>::new(),
+            "a class that declares no identifier has none to duplicate"
+        );
+    }
+
+    #[test]
+    fn an_anonymous_record_without_a_name_is_labeled_by_its_place() {
+        let (_, set) = depot_set("parcels:\n  - {id: p1, size: {width: 3}}\n");
+        assert_eq!(find(&set, "p1.size").label, "p1.size");
+    }
+
+    #[test]
+    fn a_key_on_a_class_with_no_identifier_is_reported_and_names_nothing() {
+        let (_, set) = depot_set(
+            "\
+parcels:
+  - id: p1
+    stamps:
+      \"1\": {value: 10}
+      north: {value: 20}
+",
+        );
+        assert_eq!(handles(&set, true), vec!["p1.stamps[0]", "p1.stamps[1]"]);
+        let reported: Vec<(Option<&str>, &str, Option<&str>)> = set
+            .unusable_collection_entries
+            .iter()
+            .map(|u| (u.record.as_deref(), u.slot.as_str(), u.key.as_deref()))
+            .collect();
+        assert_eq!(
+            reported,
+            vec![
+                (Some("p1"), "stamps", Some("1")),
+                (Some("p1"), "stamps", Some("north")),
+            ],
+            "each key the records load without is reported"
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .all(|u| u.reason.contains("`Stamp`")),
+            "the report names the class that has nothing for a key to be; got: {:?}",
+            set.unusable_collection_entries
+        );
+    }
+
+    #[test]
+    fn a_key_on_a_class_with_an_identifier_is_the_records_id_and_not_reported() {
+        let (_, set) = depot_set("parcels:\n  p1: {size: {width: 3}}\n");
+        assert_eq!(handles(&set, false), vec!["p1"]);
+        assert_eq!(set.unusable_collection_entries, Vec::new());
+    }
+
+    #[test]
+    fn a_record_that_omits_its_identifier_is_anonymous() {
+        let (_, set) = depot_set("parcels:\n  - {id: p1}\n  - {size: {width: 3}}\n");
+        assert_eq!(handles(&set, false), vec!["p1"]);
+        assert_eq!(handles(&set, true), vec!["parcels[1]", "parcels[1].size"]);
+    }
+
+    #[test]
+    fn a_number_authored_as_an_identifier_names_its_record() {
+        let (_, set) = depot_set("parcels:\n  - {id: 42}\n");
+        assert_eq!(handles(&set, false), vec!["42"]);
+        assert_eq!(handles(&set, true), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn an_anonymous_record_has_no_iri() {
+        let (schema, set) = depot_set("parcels:\n  - {id: p1, size: {width: 3}}\n");
+        assert_eq!(instance_iri_string(&schema, find(&set, "p1.size")), None);
+        assert_eq!(
+            instance_iris_by_id(&schema, std::slice::from_ref(&set)),
+            std::collections::BTreeMap::from([("p1", "https://example.org/depot/p1".to_string())]),
+            "only an identified record is something a reference can resolve to"
+        );
+    }
+
     #[test]
     fn instance_iri_uses_a_resolved_iri_but_never_an_unresolved_one() {
         let schema = cellar_schema();
@@ -6576,18 +6949,19 @@ classes:
             references: vec![],
             slot_values: vec![],
             scope: None,
+            anonymous: false,
         };
         assert_eq!(
-            instance_iri_string(&schema, &inst),
-            "https://upstream.example/b1",
+            instance_iri_string(&schema, &inst).as_deref(),
+            Some("https://upstream.example/b1"),
             "a resolved carried IRI wins over minting"
         );
         // An unresolved IRI (a curie whose prefix never expanded) must NOT
         // be used verbatim — the id mints instead.
         inst.uri_unresolved = true;
         assert_eq!(
-            instance_iri_string(&schema, &inst),
-            "https://example.org/cellar/b1",
+            instance_iri_string(&schema, &inst).as_deref(),
+            Some("https://example.org/cellar/b1"),
             "an unresolved IRI falls back to minting from the id"
         );
     }

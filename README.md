@@ -342,6 +342,12 @@ with no identifier is always inlined. A `tree_root`'s collections hold their
 records, so they declare it. A record authored inline where the slot holds
 references still loads, and `verify` reports it.
 
+A record whose class declares neither an `identifier` nor a `key` has no
+identity, as in LinkML. It is a blank node in the RDF outputs, its card and
+its graph node carry no IRI, and it is never merged with another record. A
+finding names it by where it sits in the data: `p1.stamps[0]` is the first
+entry (counting from 0) of the slot `stamps` on the record `p1`.
+
 Whether the container itself becomes an instance is your call, made by
 giving it an identifier. A `tree_root` class that declares an `identifier`
 slot emits as a record like any other — RDF individual, graph node, card —

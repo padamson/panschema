@@ -104,6 +104,22 @@ emits no `CHECK` for one. It is the evidence behind the Postgres writer
 keeping an IRI id a `text` column rather than `uuid`. The pattern `CHECK`
 on that column is panschema's own choice, as on any patterned column.
 
+```bash
+uv run --project conformance conformance/probe_anonymous_records.py
+```
+
+The anonymous-records probe holds records of a class with no `identifier`
+or `key` in a list, as a single value, nested in another such record, and
+twice under one `name`, and prints `linkml-validate`'s verdict and the
+Turtle `linkml-convert` writes. Each record is a blank node typed by its
+class, with no `rdfs:label`; two sharing a `name` are valid and stay two
+nodes. A bare string or a dict spelling where such a record belongs is
+rejected, and the validator's paths count entries from 0
+(`/parcels/0/stamps/0`). It is the evidence behind a record with no
+identifier having no IRI in the instance model, projecting as a blank node,
+and being named in a finding by its place in the data, and behind `verify`
+reporting a key on a dict of such records.
+
 Load an arbitrary schema through the reference implementation:
 
 ```bash

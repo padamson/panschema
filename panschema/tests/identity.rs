@@ -54,8 +54,12 @@ fn every_record_and_class_has_one_iri_across_the_model_the_rdf_and_the_graph() {
     let minted: BTreeSet<String> = set
         .instances
         .iter()
-        .map(|inst| instance_iri_string(&schema, inst))
+        .filter_map(|inst| instance_iri_string(&schema, inst))
         .collect();
+    assert!(
+        set.instances.iter().all(|inst| !inst.anonymous),
+        "every record of the fixture carries its identifier"
+    );
     assert_eq!(
         minted.len(),
         set.instances.len(),
@@ -66,7 +70,7 @@ fn every_record_and_class_has_one_iri_across_the_model_the_rdf_and_the_graph() {
     assert!(!scoped.is_empty(), "the fixture scopes at least one record");
     for inst in scoped {
         let scope = inst.scope.as_deref().expect("scoped");
-        let iri = instance_iri_string(&schema, inst);
+        let iri = instance_iri_string(&schema, inst).expect("a scoped record is identified");
         assert!(
             iri.starts_with(&format!("{scope}/")),
             "a scoped record's IRI sits under its scope: {iri} under {scope}"

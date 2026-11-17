@@ -99,7 +99,7 @@ fn a_consumer_reads_a_schema_and_its_dataset_through_one_entry() {
         .instances
         .instances
         .iter()
-        .map(|record| instance_iri_string(&loaded.schema, record))
+        .filter_map(|record| instance_iri_string(&loaded.schema, record))
         .collect();
     assert_eq!(
         iris,

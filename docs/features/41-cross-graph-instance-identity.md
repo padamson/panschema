@@ -364,6 +364,71 @@ find. Four consumers endorsed this guard; two called it load-bearing.
 
 ---
 
+### Slice 8: A record with no identifier has no identity
+
+**Status:** Complete
+
+**Priority:** Must Have
+
+**Depends on:** —
+
+**User Value:** A value object (a size, a dataset at a version) declares no
+`identifier` and no `key`, and LinkML gives its records no identity. They
+were minted as named individuals all the same, at `<Class>-<n>` in the
+schema's namespace, so the first such record of every dataset was the same
+IRI and two datasets' records merged in any combined graph: the collision
+Slice 4 removed for keyed records, left in place for the records that have
+no key to scope.
+
+**Acceptance Criteria:**
+- [x] A record whose class declares neither an `identifier` nor a `key`, or
+  that omits the value, is a blank node in every RDF output: typed by its
+  class, not an `owl:NamedIndividual`, and with no `rdfs:label`.
+- [x] Two datasets that each hold such a record at the same place keep two
+  nodes when their N-Triples are concatenated, and a rerun writes the same
+  blank-node labels.
+- [x] Two such records sharing a `name` both load, and no duplicate
+  identifier is reported.
+- [x] A finding on such a record names the record holding it, the slot, and
+  the entry: `p1.stamps[1]`.
+- [x] A string that names such a record by its `name` is a dangling
+  reference.
+- [x] The collision report and reference resolution against a sibling
+  leave such records out.
+- [x] A dict of such records loads them, and each key is reported as
+  naming nothing.
+- [x] Such a record held by a record with a CURIE id is not counted as a
+  reference leaving the dataset.
+- [x] The record's card in the schema docs shows no IRI, and its node in
+  the instance graph JSON has no `uri`.
+
+**Notes:**
+- Measured against LinkML 1.12 with
+  `conformance/probe_anonymous_records.py`: a blank node per record, no
+  label, two same-named records valid and separate, and a bare string or a
+  dict spelling rejected where such a record belongs.
+- Entries count from 0, as the reference validator's paths do
+  (`/parcels/0/stamps/0`) and as `yq` addresses them.
+- The place is the record's handle inside one dataset (`Instance::id`,
+  with `Instance::anonymous` set). It is unique there, and it moves when
+  the data is reordered, which is why nothing is minted from it.
+- A blank-node label is a digest of the place and of the dataset: its
+  name, version, and schema when the graph describes it, so an edit
+  elsewhere in the dataset moves no label, and what its records say when
+  nothing names it.
+- A dict entry is placed by its position, like a list entry, since a key
+  can be spelled two ways that read the same (`"1"` and `1`).
+- A place and an authored identifier are both strings in one dataset's id
+  space. A record whose identifier spells another record's place
+  (`p1.size` beside the record `p1` and its `size`) is reported as a
+  duplicate identifier, and a string that spells a place resolves to the
+  record there. Neither has come up in consumer data.
+- An identifier written as a number (`id: 42`) is read as the id. It was
+  ignored, so the record took a counted name; left alone, the rule above
+  would have made every such record anonymous.
+
+---
+
 ### Slice 5: Co-reference across schemas
 
 **Status:** Deferred
@@ -387,6 +452,7 @@ node. Build when a real pair needs joining, not before.
 | Slice 4: per-dataset scoping | Must Have | Slices 1, 3, 6 | Consumer check pending |
 | Slice 6: per-dataset `tree_root` selection | Must Have | — | Complete |
 | Slice 7: unintended-split diagnostic | Must Have | Slice 4 | Complete |
+| Slice 8: a record with no identifier has no identity | Must Have | — | Complete |
 | Slice 5: co-reference across schemas | Could Have | Slice 2 | Deferred |
 
 ---

@@ -676,7 +676,7 @@ impl GraphWriter {
                 uri: inst
                     .iri
                     .clone()
-                    .or_else(|| Some(crate::instances::instance_iri_string(schema, inst))),
+                    .or_else(|| crate::instances::instance_iri_string(schema, inst)),
                 uri_unresolved: inst.uri_unresolved,
                 is_abstract: false,
                 kind_metadata: Some(KindMetadata::Individual {
@@ -1743,6 +1743,59 @@ mod tests {
         (schema, set)
     }
 
+    #[test]
+    fn a_record_with_no_identifier_is_a_node_without_a_uri_held_by_its_record() {
+        let (mut schema, _) = typed_abox();
+        let mut tasting = ClassDefinition::new("Tasting");
+        let mut score = crate::linkml::SlotDefinition::new("score");
+        score.range = Some("integer".to_string());
+        tasting.attributes.insert("score".to_string(), score);
+        schema.classes.insert("Tasting".to_string(), tasting);
+        let mut tastings = crate::linkml::SlotDefinition::new("tastings");
+        tastings.range = Some("Tasting".to_string());
+        tastings.multivalued = true;
+        schema
+            .classes
+            .get_mut("Wine")
+            .unwrap()
+            .attributes
+            .insert("tastings".to_string(), tastings);
+        let data: serde_norway::Value =
+            serde_norway::from_str("wines:\n  - id: w1\n    tastings:\n      - {score: 4}\n")
+                .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+
+        let uris: Vec<(&str, bool)> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == NodeType::Individual)
+            .map(|n| (n.id.as_str(), n.uri.is_some()))
+            .collect();
+        assert_eq!(
+            uris,
+            vec![
+                ("individual:w1", true),
+                ("individual:w1.tastings[0]", false)
+            ]
+        );
+        let held: Vec<(&str, &str, Option<&str>)> = graph
+            .edges
+            .iter()
+            .filter(|e| e.target == "individual:w1.tastings[0]")
+            .map(|e| (e.source.as_str(), e.target.as_str(), e.label.as_deref()))
+            .collect();
+        assert_eq!(
+            held,
+            vec![(
+                "individual:w1",
+                "individual:w1.tastings[0]",
+                Some("tastings")
+            )]
+        );
+    }
+
     /// The A-box is the T-box realized: an individual is drawn with its
     /// class's symbol and colour, not a uniform generic marker.
     #[test]
@@ -1863,6 +1916,7 @@ mod tests {
                     &schema,
                     set.instances.iter().find(|i| i.id == "w1").unwrap()
                 )
+                .expect("an identified record has an IRI")
                 .as_str()
             ),
             "individual IRIs are unchanged by the typed encoding"
