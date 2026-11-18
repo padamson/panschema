@@ -133,6 +133,8 @@ pg_query = "18"
 # a Playwright version, so a bump moves crate, driver, and browsers
 # together.
 playwright-rs = "0.20"
+# Shows the driver's warnings while `install-browsers` runs.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Spec-conformance validation of HtmlWriter output: the same HTML5 parser
 # Servo/Firefox use. A real browser silently repairs malformed markup, so
