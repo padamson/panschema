@@ -204,6 +204,11 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.js-sys]]
+version = "0.3.104"
+when = "2026-08-08"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
 [[publisher.linux-raw-sys]]
 version = "0.4.15"
 when = "2025-01-08"
@@ -574,6 +579,31 @@ when = "2026-04-17"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
+
+[[publisher.wasm-bindgen]]
+version = "0.2.127"
+when = "2026-08-08"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.wasm-bindgen-macro]]
+version = "0.2.127"
+when = "2026-08-08"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.wasm-bindgen-macro-support]]
+version = "0.2.127"
+when = "2026-08-08"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.wasm-bindgen-shared]]
+version = "0.2.127"
+when = "2026-08-08"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.web-sys]]
+version = "0.3.104"
+when = "2026-08-08"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.winapi-util]]
 version = "0.1.11"

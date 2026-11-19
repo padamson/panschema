@@ -668,6 +668,12 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2027-05-10"
 
+[[trusted.js-sys]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-11-19"
+
 [[trusted.libc]]
 criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
@@ -999,6 +1005,12 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2027-05-10"
 
+[[trusted.wasm-bindgen]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-11-19"
+
 [[trusted.wasm-bindgen-futures]]
 criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
@@ -1011,11 +1023,23 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2027-05-10"
 
+[[trusted.wasm-bindgen-macro]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-11-19"
+
 [[trusted.wasm-bindgen-macro-support]]
 criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2027-05-10"
+
+[[trusted.wasm-bindgen-macro-support]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-11-19"
 
 [[trusted.wasm-bindgen-shared]]
 criteria = "safe-to-deploy"
@@ -1023,11 +1047,23 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2027-05-10"
 
+[[trusted.wasm-bindgen-shared]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-11-19"
+
 [[trusted.web-sys]]
 criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2027-05-10"
+
+[[trusted.web-sys]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-11-19"
 
 [[trusted.winapi-util]]
 criteria = "safe-to-deploy"
