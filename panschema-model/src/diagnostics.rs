@@ -1707,6 +1707,17 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
         },
         declared: Some(|schema| version_bindings(schema).len()),
     },
+    SlotSemanticsFamily {
+        noun: "value-claim",
+        annotation: "asserts_value",
+        issues: |schema| {
+            value_claim_declaration_issues(schema)
+                .iter()
+                .map(|i| i.message())
+                .collect()
+        },
+        declared: Some(|schema| value_claim_bindings(schema).len()),
+    },
 ];
 
 /// The declarations alone — the checker's half of [`version_declarations`].
@@ -1827,6 +1838,32 @@ pub struct VersionVerification {
     pub uncheckable: Vec<UncheckableVersion>,
 }
 
+/// A record's single string value at `slot`: `None` when it carries
+/// none, and an error naming the slot when it carries several or a value
+/// that is not a string, with a hint to quote one that YAML read as a
+/// number or a boolean.
+fn single_string_at<'a>(
+    inst: &'a crate::instances::Instance,
+    slot: &str,
+) -> Result<Option<&'a str>, String> {
+    use crate::instances::{InstanceValue, ScalarValue};
+    let Some(sv) = inst.slot_values.iter().find(|sv| sv.slot == slot) else {
+        return Ok(None);
+    };
+    match sv.values.as_slice() {
+        [] => Ok(None),
+        [InstanceValue::Scalar(ScalarValue::String(v))] => Ok(Some(v.as_str())),
+        [InstanceValue::Scalar(ScalarValue::Integer(_) | ScalarValue::Float(_))] => Err(format!(
+            "`{slot}` is a number, not a string — quote it in the data"
+        )),
+        [InstanceValue::Scalar(ScalarValue::Boolean(_))] => Err(format!(
+            "`{slot}` is a boolean, not a string — quote it in the data"
+        )),
+        [_] => Err(format!("`{slot}` is not a string")),
+        _ => Err(format!("`{slot}` has several values where one is expected")),
+    }
+}
+
 /// Every version pin a dataset's records state, evaluated against the
 /// siblings' resolved versions. A record carrying no value at the pinned
 /// slot states no pin. A pin that cannot be evaluated — no single string
@@ -1838,26 +1875,6 @@ pub fn version_pins(
     declarations: &VersionBindings,
     siblings: &[SiblingVersion],
 ) -> VersionVerification {
-    use crate::instances::{InstanceValue, ScalarValue};
-
-    fn single_string<'a>(
-        inst: &'a crate::instances::Instance,
-        slot: &str,
-    ) -> Result<Option<&'a str>, String> {
-        let Some(sv) = inst.slot_values.iter().find(|sv| sv.slot == slot) else {
-            return Ok(None);
-        };
-        match sv.values.as_slice() {
-            [] => Ok(None),
-            [InstanceValue::Scalar(ScalarValue::String(v))] => Ok(Some(v.as_str())),
-            [InstanceValue::Scalar(ScalarValue::Integer(_) | ScalarValue::Float(_))] => Err(
-                format!("`{slot}` is a number, not a string — quote it in the data"),
-            ),
-            [_] => Err(format!("`{slot}` is not a string")),
-            _ => Err(format!("`{slot}` has several values where one is expected")),
-        }
-    }
-
     fn evaluate(
         inst: &crate::instances::Instance,
         slot: &str,
@@ -1870,7 +1887,7 @@ pub fn version_pins(
                 "the declaration is defective (see the schema's load warnings)".to_string(),
             );
         };
-        let named = single_string(inst, sibling_slot)?.ok_or_else(|| {
+        let named = single_string_at(inst, sibling_slot)?.ok_or_else(|| {
             format!("the record has no `{sibling_slot}` value naming the sibling")
         })?;
         let sibling = SiblingVersion::resolve(siblings, named)?;
@@ -1891,7 +1908,7 @@ pub fn version_pins(
             let Some(pin) = declarations.governing(&inst.types, slot_name) else {
                 continue;
             };
-            let outcome = match single_string(inst, slot_name) {
+            let outcome = match single_string_at(inst, slot_name) {
                 Ok(None) => continue,
                 Ok(Some(declared)) => evaluate(inst, slot_name, declared, pin, siblings),
                 Err(detail) => Err(detail),
@@ -1905,6 +1922,850 @@ pub fn version_pins(
                 Ok(mismatch) => {
                     out.pins += 1;
                     out.mismatched.extend(mismatch);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// An `asserts_value` declaration: each entry at the annotated slot is a
+/// record claiming that the sibling record named at `record_slot`
+/// carries the value at `value_slot` at the slot `slot_slot` names, and,
+/// when `among` is stated, that the claimed record is among the
+/// containing record's values there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueClaim {
+    Of {
+        record_slot: String,
+        slot_slot: String,
+        value_slot: String,
+        among: Option<String>,
+    },
+    /// A defective declaration still binds: its claims are reported
+    /// uncheckable, never as holding.
+    Malformed,
+}
+
+pub type ValueClaimBindings = ScopedBindings<ValueClaim>;
+
+/// A defect in an `asserts_value` declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueClaimDeclarationIssue {
+    pub slot: String,
+    pub detail: String,
+}
+
+impl ValueClaimDeclarationIssue {
+    pub fn message(&self) -> String {
+        format!("`asserts_value` on slot `{}`: {}", self.slot, self.detail)
+    }
+}
+
+/// The fields an `asserts_value` declaration takes.
+pub const VALUE_CLAIM_FIELDS: [&str; 4] = ["record_slot", "slot_slot", "value_slot", "among"];
+
+/// The one parse of an `asserts_value` annotation value: a mapping with
+/// string `record_slot`, `slot_slot`, and `value_slot`, an optional
+/// string `among`, and nothing else.
+fn parse_value_claim_declaration(
+    slot: &str,
+    value: &serde_norway::Value,
+    issues: &mut Vec<ValueClaimDeclarationIssue>,
+) -> ValueClaim {
+    let mut issue = |detail: String| {
+        issues.push(ValueClaimDeclarationIssue {
+            slot: slot.to_string(),
+            detail,
+        })
+    };
+    let serde_norway::Value::Mapping(m) = value else {
+        issue(
+            "the value must be a mapping under `value:` with `record_slot`, `slot_slot`, and \
+             `value_slot` (and optionally `among`); its claims are uncheckable until it is"
+                .to_string(),
+        );
+        return ValueClaim::Malformed;
+    };
+    for key in m
+        .keys()
+        .filter(|k| !k.as_str().is_some_and(|k| VALUE_CLAIM_FIELDS.contains(&k)))
+    {
+        issue(format!(
+            "unrecognized field `{}` — the declaration takes only `record_slot`, `slot_slot`, \
+             `value_slot`, and `among`",
+            key.as_str().unwrap_or("<non-string key>")
+        ));
+    }
+    let mut field = |name: &str, required: bool| match m.get(name).map(|v| v.as_str()) {
+        None if required => {
+            issue(format!(
+                "the declaration needs `{name}`; its claims are uncheckable until it has it"
+            ));
+            Err(())
+        }
+        None => Ok(None),
+        Some(None) => {
+            issue(format!(
+                "`{name}` must be a string naming a slot; its claims are uncheckable until it is"
+            ));
+            Err(())
+        }
+        Some(Some(named)) => Ok(Some(named.to_string())),
+    };
+    match (
+        field("record_slot", true),
+        field("slot_slot", true),
+        field("value_slot", true),
+        field("among", false),
+    ) {
+        (Ok(Some(record_slot)), Ok(Some(slot_slot)), Ok(Some(value_slot)), Ok(among)) => {
+            ValueClaim::Of {
+                record_slot,
+                slot_slot,
+                value_slot,
+                among,
+            }
+        }
+        _ => ValueClaim::Malformed,
+    }
+}
+
+/// `among` and every slot in `resolved` that specializes it through
+/// `is_a` — the slots whose values count as a container's `among`.
+/// Empty when the class carries none of them.
+fn among_family(
+    schema: &SchemaDefinition,
+    resolved: &BTreeMap<String, crate::linkml::SlotDefinition>,
+    among: &str,
+) -> std::collections::BTreeSet<String> {
+    let specializes = |def: &crate::linkml::SlotDefinition| {
+        let mut parent = def.is_a.as_deref();
+        // Revisiting a slot means a malformed `is_a` cycle.
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        while let Some(p) = parent
+            && seen.insert(p)
+        {
+            if p == among {
+                return true;
+            }
+            parent = resolved
+                .get(p)
+                .or_else(|| schema.slots.get(p))
+                .and_then(|d| d.is_a.as_deref());
+        }
+        false
+    };
+    resolved
+        .iter()
+        .filter(|(name, def)| name.as_str() == among || specializes(def))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// The classes a record at a `range`-ranged slot can be: every class at
+/// or under `range` (through `is_a` or `mixins`) that is neither
+/// abstract nor a mixin, or `range` itself when there is none.
+fn instantiable_under<'a>(schema: &'a SchemaDefinition, range: &'a str) -> Vec<&'a str> {
+    let under: Vec<&str> = schema
+        .classes
+        .iter()
+        .filter(|(_, class)| !class.r#abstract && !class.mixin)
+        .map(|(name, _)| name.as_str())
+        .filter(|name| {
+            crate::linkml_resolve::class_ancestors(schema, name)
+                .iter()
+                .any(|(ancestor, _)| *ancestor == range)
+        })
+        .collect();
+    if under.is_empty() { vec![range] } else { under }
+}
+
+/// The parse alone: every `asserts_value` declaration from the shared
+/// walk, beside the defects in how each is written.
+fn parsed_value_claims(
+    schema: &SchemaDefinition,
+) -> (ValueClaimBindings, Vec<ValueClaimDeclarationIssue>) {
+    let mut issues = Vec::new();
+    let bindings = scoped_declarations(schema, "asserts_value", |name, value| {
+        parse_value_claim_declaration(name, value, &mut issues)
+    });
+    (bindings, issues)
+}
+
+/// Every `asserts_value` declaration and every defect in one. Defects
+/// are reported once per slot, however many scopes restate them. A
+/// declaration is judged against the classes that can have records: an
+/// abstract or mixin class is judged through the classes under it.
+pub fn value_claim_declarations(
+    schema: &SchemaDefinition,
+) -> (ValueClaimBindings, Vec<ValueClaimDeclarationIssue>) {
+    let (bindings, mut issues) = parsed_value_claims(schema);
+    if bindings.is_empty() {
+        return (bindings, issues);
+    }
+    let resolved: BTreeMap<&str, BTreeMap<String, crate::linkml::SlotDefinition>> = schema
+        .classes
+        .iter()
+        .map(|(name, class)| {
+            (
+                name.as_str(),
+                crate::linkml_resolve::resolve_effective_slots(class, schema),
+            )
+        })
+        .collect();
+    let mut post: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    let mut defect = |slot: &str, detail: String| post.insert((slot.to_string(), detail));
+    for slot in bindings
+        .by_slot
+        .keys()
+        .filter(|slot| !resolved.values().any(|slots| slots.contains_key(*slot)))
+    {
+        defect(
+            slot,
+            "no class carries this slot, so no record can state a claim".to_string(),
+        );
+    }
+    // Judged per carrying class, from its resolved view: the slot's range
+    // must be a class whose records carry the three named slots, and the
+    // carrying class must carry `among` or a slot specializing it.
+    for (class_name, class) in &schema.classes {
+        if class.r#abstract || class.mixin {
+            continue;
+        }
+        let slots = &resolved[class_name.as_str()];
+        for (slot, def) in slots {
+            let Some(ValueClaim::Of {
+                record_slot,
+                slot_slot,
+                value_slot,
+                among,
+            }) = bindings.governing(std::slice::from_ref(class_name), slot)
+            else {
+                continue;
+            };
+            match def.range.as_deref() {
+                Some(range) if schema.classes.contains_key(range) => {
+                    let entry_classes = instantiable_under(schema, range);
+                    for (field, named) in [
+                        ("record_slot", record_slot),
+                        ("slot_slot", slot_slot),
+                        ("value_slot", value_slot),
+                    ] {
+                        if !entry_classes
+                            .iter()
+                            .any(|class| resolved[class].contains_key(named))
+                        {
+                            defect(
+                                slot,
+                                format!(
+                                    "`{field}` names `{named}`, which its entry class `{range}` \
+                                     does not carry"
+                                ),
+                            );
+                        }
+                    }
+                }
+                Some(range) => {
+                    defect(
+                        slot,
+                        format!(
+                            "it ranges over `{range}`, which is not a class, so its entries \
+                             are not records"
+                        ),
+                    );
+                }
+                None => {
+                    defect(
+                        slot,
+                        "it has no class range, so its entries are not records".to_string(),
+                    );
+                }
+            }
+            if let Some(among) = among
+                && among_family(schema, slots, among).is_empty()
+            {
+                defect(
+                    slot,
+                    format!("`among` names `{among}`, which `{class_name}` does not carry"),
+                );
+            }
+        }
+    }
+    issues.extend(
+        post.into_iter()
+            .map(|(slot, detail)| ValueClaimDeclarationIssue { slot, detail }),
+    );
+    (bindings, issues)
+}
+
+/// The declarations alone — the checker's half of
+/// [`value_claim_declarations`], without its defect analysis.
+pub fn value_claim_bindings(schema: &SchemaDefinition) -> ValueClaimBindings {
+    parsed_value_claims(schema).0
+}
+
+/// The defects alone — the load diagnostics' half of [`value_claim_declarations`].
+pub fn value_claim_declaration_issues(
+    schema: &SchemaDefinition,
+) -> Vec<ValueClaimDeclarationIssue> {
+    value_claim_declarations(schema).1
+}
+
+/// One `resolve_against` sibling as the cross-graph checks read it: the
+/// entry key that names it in findings, its schema, and every dataset it
+/// declares.
+#[derive(Debug, Clone, Copy)]
+pub struct SiblingGraph<'a> {
+    pub entry: &'a str,
+    pub schema: &'a SchemaDefinition,
+    pub sets: &'a [crate::instances::InstanceSet],
+}
+
+/// How an evaluated value claim fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueClaimFailureKind {
+    /// The record carries other values at the slot, as authored there.
+    Differs {
+        sibling: String,
+        actual: Vec<String>,
+    },
+    /// The record's class carries the slot, but the record sets no value.
+    Unset { sibling: String },
+    /// The record's class does not carry the slot at all.
+    SlotNotCarried { sibling: String, class: String },
+    /// The record is not among the containing record's `among` values.
+    NotAmong { container: String, among: String },
+}
+
+/// A value claim the graph contradicts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedValueClaim {
+    /// The claiming entry, named by its place in the data.
+    pub entry: String,
+    /// The IRI of the record the entry makes its claim about.
+    pub record: String,
+    pub slot: String,
+    pub value: String,
+    pub kind: ValueClaimFailureKind,
+}
+
+impl FailedValueClaim {
+    pub fn message(&self) -> String {
+        let claim = format!(
+            "claims {} carries `{}` at `{}`",
+            self.record, self.value, self.slot
+        );
+        let detail = match &self.kind {
+            ValueClaimFailureKind::Differs { sibling, actual } => {
+                format!(
+                    "{claim}, but in `{sibling}` it carries `{}`",
+                    actual.join("`, `")
+                )
+            }
+            ValueClaimFailureKind::Unset { sibling } => {
+                format!("{claim}, but in `{sibling}` it carries no value there")
+            }
+            ValueClaimFailureKind::SlotNotCarried { sibling, class } => format!(
+                "{claim}, but `{}` is not a slot of its class `{class}` in `{sibling}`",
+                self.slot
+            ),
+            ValueClaimFailureKind::NotAmong { container, among } => {
+                format!("{} is not among `{container}`'s `{among}`", self.record)
+            }
+        };
+        format!("value claim `{}`: {detail}", self.entry)
+    }
+}
+
+/// A value claim that could not be evaluated, with the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncheckableValueClaim {
+    pub entry: String,
+    pub detail: String,
+}
+
+impl UncheckableValueClaim {
+    pub fn message(&self) -> String {
+        format!(
+            "value claim `{}` could not be checked: {}",
+            self.entry, self.detail
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ValueClaimVerification {
+    /// Claims that could be evaluated; `failed_claims` counts among them.
+    pub claims: usize,
+    pub failed_claims: usize,
+    /// Every failure found, an entry failing for more than one reason
+    /// once per reason.
+    pub failures: Vec<FailedValueClaim>,
+    pub uncheckable: Vec<UncheckableValueClaim>,
+}
+
+/// One sibling's records as the value-claim check looks them up.
+struct IndexedSibling<'a> {
+    graph: SiblingGraph<'a>,
+    /// Each dataset's records' minted IRIs, by id.
+    by_set: Vec<BTreeMap<&'a str, String>>,
+    /// The ids that mint one IRI across the sibling's datasets.
+    by_id: BTreeMap<&'a str, String>,
+    /// Records by minted IRI, each with the dataset that holds it.
+    by_iri: BTreeMap<String, Vec<(usize, &'a crate::instances::Instance)>>,
+    /// The effective slots of every class a record is of.
+    slots: BTreeMap<&'a str, BTreeMap<String, crate::linkml::SlotDefinition>>,
+}
+
+impl IndexedSibling<'_> {
+    /// The IRI a reference `target` denotes when a record of dataset
+    /// `set` states it: that dataset's record of the id, else the one
+    /// record of the id among the sibling's datasets, else the target's
+    /// expansion against the sibling schema. Two datasets scoped apart
+    /// can each hold a record of one id, so the stating dataset is asked
+    /// first and an id it does not hold resolves only when unambiguous.
+    fn reference_iri(&self, set: usize, target: &str) -> String {
+        self.by_set[set].get(target).cloned().unwrap_or_else(|| {
+            crate::instances::reference_target_iri(&self.by_id, self.graph.schema, target)
+        })
+    }
+}
+
+/// The `resolve_against` siblings indexed for [`value_claims`]: built
+/// once per check and read for every referring dataset.
+pub struct SiblingRecords<'a> {
+    siblings: Vec<IndexedSibling<'a>>,
+}
+
+impl<'a> SiblingRecords<'a> {
+    pub fn index(siblings: &[SiblingGraph<'a>]) -> Self {
+        let siblings = siblings
+            .iter()
+            .map(|graph| {
+                let by_set: Vec<BTreeMap<&str, String>> = graph
+                    .sets
+                    .iter()
+                    .map(|set| {
+                        crate::instances::instance_iris_by_id(
+                            graph.schema,
+                            std::slice::from_ref(set),
+                        )
+                    })
+                    .collect();
+                let mut minted: BTreeMap<&str, Option<&String>> = BTreeMap::new();
+                for (id, iri) in by_set.iter().flatten() {
+                    minted
+                        .entry(id)
+                        .and_modify(|one| *one = one.filter(|seen| *seen == iri))
+                        .or_insert(Some(iri));
+                }
+                let by_id = minted
+                    .into_iter()
+                    .filter_map(|(id, iri)| Some((id, iri?.clone())))
+                    .collect();
+                let mut by_iri: BTreeMap<String, Vec<(usize, &crate::instances::Instance)>> =
+                    BTreeMap::new();
+                let mut slots = BTreeMap::new();
+                for (n, set) in graph.sets.iter().enumerate() {
+                    for inst in &set.instances {
+                        let Some(iri) = by_set[n].get(inst.id.as_str()) else {
+                            continue;
+                        };
+                        by_iri.entry(iri.clone()).or_default().push((n, inst));
+                        for (name, class) in inst
+                            .types
+                            .iter()
+                            .filter_map(|t| graph.schema.classes.get_key_value(t))
+                        {
+                            slots.entry(name.as_str()).or_insert_with(|| {
+                                crate::linkml_resolve::resolve_effective_slots(class, graph.schema)
+                            });
+                        }
+                    }
+                }
+                IndexedSibling {
+                    graph: *graph,
+                    by_set,
+                    by_id,
+                    by_iri,
+                    slots,
+                }
+            })
+            .collect();
+        SiblingRecords { siblings }
+    }
+}
+
+/// A claimed value as the sibling slot's range reads it.
+#[derive(Debug, Clone, PartialEq)]
+enum ClaimedValue {
+    Text(String),
+    /// A permissible value, by its key in the named enum.
+    Member {
+        enumeration: String,
+        key: String,
+    },
+    Integer(i64),
+    Number(f64),
+    Boolean(bool),
+    Iri(String),
+}
+
+/// Every value claim a dataset's records state, evaluated against the
+/// sibling graphs. A claim holds when each sibling record minting the
+/// claimed IRI carries the value at the named slot (read by that slot's
+/// range) and, when the declaration states `among`, the record is among
+/// the containing record's values there or at a slot specializing it. A
+/// claim that cannot be evaluated — no single record, slot, or value, a
+/// value written as a number, a record no sibling mints, a value the
+/// range cannot read, a prefix this schema does not declare, a union
+/// range, a container that carries neither `among` nor a slot
+/// specializing it, a defective declaration — is reported uncheckable,
+/// never as holding; one that fails outright fails even when another
+/// part of it cannot be evaluated.
+pub fn value_claims(
+    schema: &SchemaDefinition,
+    set: &crate::instances::InstanceSet,
+    declarations: &ValueClaimBindings,
+    siblings: &SiblingRecords,
+) -> ValueClaimVerification {
+    use crate::instances::{Instance, InstanceValue, ScalarValue};
+    use std::collections::BTreeSet;
+
+    fn single<'a>(inst: &'a Instance, slot: &'a str) -> Result<&'a InstanceValue, String> {
+        let mut found = inst.values_at(slot);
+        match (found.next(), found.next()) {
+            (None, _) => Err(format!("the entry carries no `{slot}`")),
+            (Some(one), None) => Ok(one),
+            _ => Err(format!(
+                "the entry carries several `{slot}` values where one is expected"
+            )),
+        }
+    }
+
+    fn single_string<'a>(inst: &'a Instance, slot: &str) -> Result<&'a str, String> {
+        single_string_at(inst, slot)?.ok_or_else(|| format!("the entry carries no `{slot}`"))
+    }
+
+    /// The IRI a claimed `prefix:local` or absolute `value` denotes: its
+    /// expansion against the claiming schema, or the value itself when
+    /// neither schema declares its prefix (a scheme such as `mailto:`).
+    /// Unreadable when only the sibling declares the prefix, or when
+    /// `verbatim` is off and this schema does not.
+    fn claimed_iri(
+        schema: &SchemaDefinition,
+        sibling: &SchemaDefinition,
+        value: &str,
+        verbatim: bool,
+    ) -> Result<String, String> {
+        if let Some(iri) = crate::linkml_resolve::expand_curie(schema, value) {
+            return Ok(iri);
+        }
+        let prefix = value.split_once(':').map_or(value, |(prefix, _)| prefix);
+        if verbatim && !sibling.prefixes.contains_key(prefix) {
+            return Ok(value.to_string());
+        }
+        Err(format!(
+            "`{value}` uses the prefix `{prefix}`, which this schema does not declare"
+        ))
+    }
+
+    /// Read `value` the way `slot`'s range in the sibling reads it, for a
+    /// record of the sibling's dataset `set`.
+    fn read_claimed(
+        schema: &SchemaDefinition,
+        index: &IndexedSibling,
+        set: usize,
+        slot: &str,
+        def: &crate::linkml::SlotDefinition,
+        value: &str,
+    ) -> Result<ClaimedValue, String> {
+        if !def.any_of.is_empty() {
+            return Err(format!(
+                "`{slot}` has alternative ranges (`any_of`), so which one reads `{value}` \
+                 cannot be decided"
+            ));
+        }
+        let sibling = index.graph.schema;
+        let Some(range) = def.range.as_deref() else {
+            return Ok(ClaimedValue::Text(value.to_string()));
+        };
+        if let Some(enum_def) = sibling.enums.get(range) {
+            return crate::rules::permitted_value_key(enum_def, value)
+                .map(|key| ClaimedValue::Member {
+                    enumeration: range.to_string(),
+                    key: key.to_string(),
+                })
+                .ok_or_else(|| format!("`{value}` is not a permissible value of `{range}`"));
+        }
+        if sibling.classes.contains_key(range) {
+            return if value.contains(':') {
+                claimed_iri(schema, sibling, value, false)
+            } else {
+                Ok(index.reference_iri(set, value))
+            }
+            .map(ClaimedValue::Iri);
+        }
+        match crate::primitives::effective_primitive(sibling, range) {
+            Some("integer") => value
+                .parse::<i64>()
+                .map(ClaimedValue::Integer)
+                .map_err(|_| format!("`{value}` is not an integer")),
+            Some("float" | "double" | "decimal") => value
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .map(ClaimedValue::Number)
+                .ok_or_else(|| format!("`{value}` is not a number")),
+            Some("boolean") => match value.to_ascii_lowercase().as_str() {
+                "true" => Ok(ClaimedValue::Boolean(true)),
+                "false" => Ok(ClaimedValue::Boolean(false)),
+                _ => Err(format!("`{value}` is not a boolean")),
+            },
+            Some("uri" | "uriorcurie" | "curie") if value.contains(':') => {
+                claimed_iri(schema, sibling, value, true).map(ClaimedValue::Iri)
+            }
+            _ => Ok(ClaimedValue::Text(value.to_string())),
+        }
+    }
+
+    fn carries(
+        index: &IndexedSibling,
+        set: usize,
+        claimed: &ClaimedValue,
+        stored: &InstanceValue,
+    ) -> bool {
+        match (claimed, stored) {
+            (ClaimedValue::Iri(iri), InstanceValue::Reference { target, .. }) => {
+                index.reference_iri(set, target) == *iri
+            }
+            (ClaimedValue::Iri(iri), InstanceValue::Scalar(ScalarValue::String(s))) => {
+                crate::linkml_resolve::expand_curie_or_verbatim(index.graph.schema, s) == *iri
+            }
+            (ClaimedValue::Integer(n), InstanceValue::Scalar(ScalarValue::Integer(i))) => i == n,
+            (ClaimedValue::Number(n), InstanceValue::Scalar(ScalarValue::Integer(i))) => {
+                *i as f64 == *n
+            }
+            (ClaimedValue::Number(n), InstanceValue::Scalar(ScalarValue::Float(f))) => f == n,
+            (ClaimedValue::Boolean(b), InstanceValue::Scalar(ScalarValue::Boolean(s))) => b == s,
+            (ClaimedValue::Member { enumeration, key }, InstanceValue::Scalar(s)) => {
+                index.graph.schema.enums.get(enumeration).and_then(|e| {
+                    crate::rules::permitted_value_key(e, &crate::instances::scalar_to_display(s))
+                }) == Some(key.as_str())
+            }
+            (ClaimedValue::Text(t), InstanceValue::Scalar(s)) => {
+                crate::instances::scalar_to_display(s) == *t
+            }
+            _ => false,
+        }
+    }
+
+    let records: BTreeMap<&str, &Instance> = set
+        .instances
+        .iter()
+        .map(|inst| (inst.id.as_str(), inst))
+        .collect();
+
+    // `among`, when declared, as the slot's name and the container's
+    // values there (`None` when the container's class does not carry it).
+    type AmongSet<'s> = (&'s str, Option<BTreeSet<String>>);
+    let evaluate = |container: &Instance,
+                    entry: &Instance,
+                    claim: &ValueClaim,
+                    among: Option<&AmongSet>|
+     -> Result<Vec<FailedValueClaim>, String> {
+        let ValueClaim::Of {
+            record_slot,
+            slot_slot,
+            value_slot,
+            ..
+        } = claim
+        else {
+            return Err(
+                "the declaration is defective (see the schema's load warnings)".to_string(),
+            );
+        };
+        let record = match single(entry, record_slot)? {
+            InstanceValue::Reference { target, .. } => target.as_str(),
+            InstanceValue::Scalar(ScalarValue::String(s)) => s.as_str(),
+            _ => return Err(format!("`{record_slot}` is not a reference or IRI")),
+        };
+        let record = crate::linkml_resolve::resolve_reference_iri(schema, record);
+        let slot = single_string(entry, slot_slot)?;
+        let value = single_string(entry, value_slot)?;
+        let mut failures: Vec<FailedValueClaim> = Vec::new();
+        // The first part that could not be evaluated; it decides the
+        // outcome only when no part fails outright.
+        let mut unknown: Option<String> = None;
+        let mut fail = |kind: ValueClaimFailureKind| {
+            let failure = FailedValueClaim {
+                entry: entry.id.clone(),
+                record: record.clone(),
+                slot: slot.to_string(),
+                value: value.to_string(),
+                kind,
+            };
+            if !failures.contains(&failure) {
+                failures.push(failure);
+            }
+        };
+        if let Some((among, iris)) = among {
+            match iris {
+                None => {
+                    unknown.get_or_insert_with(|| {
+                        format!(
+                            "`{}`'s class does not carry `{among}`, so whether the record is \
+                             among it cannot be decided",
+                            container.id
+                        )
+                    });
+                }
+                Some(iris) if !iris.contains(&record) => {
+                    fail(ValueClaimFailureKind::NotAmong {
+                        container: container.id.clone(),
+                        among: among.to_string(),
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+        let matches: Vec<(&IndexedSibling, usize, &Instance)> = siblings
+            .siblings
+            .iter()
+            .flat_map(|index| {
+                index
+                    .by_iri
+                    .get(&record)
+                    .into_iter()
+                    .flatten()
+                    .map(move |(set, inst)| (index, *set, *inst))
+            })
+            .collect();
+        if matches.is_empty() {
+            unknown.get_or_insert_with(|| format!("{record} resolves to no sibling record"));
+        }
+        for (index, set, inst) in matches {
+            let sibling = index.graph.entry.to_string();
+            let Some((class_name, resolved)) = inst
+                .types
+                .iter()
+                .find_map(|t| index.slots.get_key_value(t.as_str()))
+            else {
+                unknown.get_or_insert_with(|| {
+                    format!("{record}'s class is not one `{sibling}` declares")
+                });
+                continue;
+            };
+            let Some(def) = resolved.get(slot) else {
+                fail(ValueClaimFailureKind::SlotNotCarried {
+                    sibling,
+                    class: class_name.to_string(),
+                });
+                continue;
+            };
+            let claimed = match read_claimed(schema, index, set, slot, def, value) {
+                Ok(claimed) => claimed,
+                Err(detail) => {
+                    unknown.get_or_insert(detail);
+                    continue;
+                }
+            };
+            let stored: Vec<&InstanceValue> = inst.values_at(slot).collect();
+            if stored.is_empty() {
+                fail(ValueClaimFailureKind::Unset { sibling });
+            } else if !stored.iter().any(|s| carries(index, set, &claimed, s)) {
+                fail(ValueClaimFailureKind::Differs {
+                    sibling,
+                    actual: stored
+                        .iter()
+                        .map(|s| crate::instances::value_display(s))
+                        .collect(),
+                });
+            }
+        }
+        if let Some(detail) = unknown
+            && failures.is_empty()
+        {
+            return Err(detail);
+        }
+        Ok(failures)
+    };
+
+    let mut out = ValueClaimVerification::default();
+    // The slots that count as `among` for a class, resolved once per
+    // class and `among` however many containers share them.
+    let mut families: BTreeMap<(&str, &str), BTreeSet<String>> = BTreeMap::new();
+    for container in &set.instances {
+        for slot_name in declarations.by_slot.keys() {
+            let Some(claim) = declarations.governing(&container.types, slot_name) else {
+                continue;
+            };
+            let mut entries = container.values_at(slot_name).enumerate().peekable();
+            if entries.peek().is_none() {
+                continue;
+            }
+            let among: Option<AmongSet> = match claim {
+                ValueClaim::Of {
+                    among: Some(among), ..
+                } => {
+                    let mut family: BTreeSet<String> = BTreeSet::new();
+                    for (name, class) in container
+                        .types
+                        .iter()
+                        .filter_map(|t| schema.classes.get_key_value(t))
+                    {
+                        let slots = families.entry((name, among)).or_insert_with(|| {
+                            among_family(
+                                schema,
+                                &crate::linkml_resolve::resolve_effective_slots(class, schema),
+                                among,
+                            )
+                        });
+                        family.extend(slots.iter().cloned());
+                    }
+                    let values = (!family.is_empty()).then(|| {
+                        family
+                            .iter()
+                            .flat_map(|slot| container.values_at(slot))
+                            .filter_map(|v| match v {
+                                InstanceValue::Reference { target, .. } => Some(target.as_str()),
+                                InstanceValue::Scalar(ScalarValue::String(s)) => Some(s.as_str()),
+                                _ => None,
+                            })
+                            .map(|t| crate::linkml_resolve::resolve_reference_iri(schema, t))
+                            .collect()
+                    });
+                    Some((among, values))
+                }
+                _ => None,
+            };
+            for (position, value) in entries {
+                let outcome = match value {
+                    InstanceValue::Reference { target, .. } => match records.get(target.as_str()) {
+                        Some(entry) => evaluate(container, entry, claim, among.as_ref())
+                            .map_err(|detail| (target.clone(), detail)),
+                        None => Err((
+                            target.clone(),
+                            "the entry names no record of this dataset".to_string(),
+                        )),
+                    },
+                    _ => Err((
+                        format!("{}.{slot_name}[{position}]", container.id),
+                        "the entry is not a record".to_string(),
+                    )),
+                };
+                match outcome {
+                    Ok(failures) => {
+                        out.claims += 1;
+                        if !failures.is_empty() {
+                            out.failed_claims += 1;
+                            out.failures.extend(failures);
+                        }
+                    }
+                    Err((entry, detail)) => out
+                        .uncheckable
+                        .push(UncheckableValueClaim { entry, detail }),
                 }
             }
         }
@@ -2333,10 +3194,7 @@ pub fn unverified_absences(
     schema: &crate::linkml::SchemaDefinition,
     set: &crate::instances::InstanceSet,
     declarations: &AbsenceBindings,
-    siblings: &[(
-        &crate::linkml::SchemaDefinition,
-        &[crate::instances::InstanceSet],
-    )],
+    siblings: &[SiblingGraph],
 ) -> AbsenceVerification {
     use crate::instances::InstanceValue;
     use std::collections::BTreeSet;
@@ -2355,11 +3213,12 @@ pub fn unverified_absences(
     let mut minted_union: BTreeSet<String> = BTreeSet::new();
     let indexes: Vec<SiblingIndex> = siblings
         .iter()
-        .map(|(sibling_schema, sibling_sets)| {
+        .map(|sibling| {
+            let (sibling_schema, sibling_sets) = (sibling.schema, sibling.sets);
             let by_id = crate::instances::instance_iris_by_id(sibling_schema, sibling_sets);
             minted_union.extend(by_id.values().cloned());
             let mut records = Vec::new();
-            for sibling_set in *sibling_sets {
+            for sibling_set in sibling_sets {
                 for record in &sibling_set.instances {
                     let referenced = record
                         .slot_values
@@ -2372,11 +3231,7 @@ pub fn unverified_absences(
                             } => Some(target),
                             _ => None,
                         })
-                        .map(|t| {
-                            by_id.get(t.as_str()).cloned().unwrap_or_else(|| {
-                                crate::linkml_resolve::resolve_reference_iri(sibling_schema, t)
-                            })
-                        })
+                        .map(|t| crate::instances::reference_target_iri(&by_id, sibling_schema, t))
                         .collect();
                     records.push(SiblingRecord {
                         id: &record.id,
@@ -2404,10 +3259,7 @@ pub fn unverified_absences(
                 continue;
             };
             let anchors: Result<Vec<String>, &str> = inst
-                .slot_values
-                .iter()
-                .filter(|sv| sv.slot == *slot_name)
-                .flat_map(|sv| &sv.values)
+                .values_at(slot_name)
                 .map(|v| match v {
                     InstanceValue::Reference { target, .. } => Ok(target.clone()),
                     InstanceValue::Scalar(s) => Ok(crate::instances::scalar_to_display(s)),
@@ -2475,13 +3327,7 @@ pub fn unverified_absences(
                 continue;
             }
             let via_values: Vec<&InstanceValue> = via_slot
-                .map(|slot| {
-                    inst.slot_values
-                        .iter()
-                        .filter(|sv| sv.slot == slot)
-                        .flat_map(|sv| &sv.values)
-                        .collect()
-                })
+                .map(|slot| inst.values_at(slot).collect())
                 .unwrap_or_default();
             if via_values.len() > 1 {
                 out.uncheckable.push(UncheckableAbsence {
@@ -4556,6 +5402,17 @@ classes:
         schema
     }
 
+    fn sibling_graph<'a>(
+        schema: &'a SchemaDefinition,
+        set: &'a crate::instances::InstanceSet,
+    ) -> SiblingGraph<'a> {
+        SiblingGraph {
+            entry: "sibling",
+            schema,
+            sets: std::slice::from_ref(set),
+        }
+    }
+
     fn scoped_set(schema: &SchemaDefinition, yaml: &str) -> crate::instances::InstanceSet {
         let data: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
         crate::instances::InstanceSet::from_linkml_data(schema, &data)
@@ -5157,6 +6014,617 @@ classes:
         );
     }
 
+    #[test]
+    fn value_claim_declaration_defects_are_load_warnings() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Question:\n    slots: [anchors, \
+             claims, loose, bare, partial, typed, orphan_among, scalar, rangeless]\n  Claim:\n    slots: \
+             [record, slot, value]\n  Claiming: {mixin: true, slots: [claims]}\n  Sketch: \
+             {abstract: true, slots: [claims]}\n  Review: {slots: [citations, claims, \
+             family_claims, lonely_claims, stray_claims]}\n  Aside: {}\n  AsideDraft: {is_a: Aside, abstract: true, slots: [record, slot, value]}\n  AbstractClaim: {abstract: true}\n  Narrow: {is_a: \
+             AbstractClaim, slots: [record, slot, value]}\n  Lonely: {abstract: true, slots: \
+             [record, slot, value]}\nslots:\n  stray_claims: {range: Aside, annotations: {asserts_value: {value: {record_slot: record, slot_slot: slot, value_slot: value}}}}\n  citations: {is_a: anchors, range: uri, \
+             multivalued: true}\n  family_claims: {range: AbstractClaim, annotations: \
+             {asserts_value: {value: {record_slot: record, slot_slot: slot, value_slot: \
+             value}}}}\n  lonely_claims: {range: Lonely, annotations: {asserts_value: {value: \
+             {record_slot: record, slot_slot: slot, value_slot: value}}}}\n  rangeless:\n    \
+             annotations:\n      asserts_value:\n        \
+             value:\n          record_slot: record\n          slot_slot: slot\n          value_slot: \
+             value\n  scalar:\n    range: string\n    annotations:\n      \
+             asserts_value:\n        value:\n          record_slot: record\n          slot_slot: \
+             slot\n          value_slot: value\n  anchors: {range: uri, multivalued: true}\n  \
+             record: {range: uri}\n  \
+             slot: {range: string}\n  value: {range: string}\n  claims:\n    range: Claim\n    \
+             multivalued: true\n    annotations:\n      asserts_value:\n        value:\n          \
+             record_slot: record\n          slot_slot: slot\n          value_slot: value\n          \
+             among: anchors\n  loose:\n    range: Claim\n    annotations:\n      asserts_value:\n        \
+             value:\n          record_slot: record\n          slot_slot: slot\n          value_slot: \
+             value\n          extra: 1\n  bare:\n    range: Claim\n    annotations:\n      \
+             asserts_value:\n        value: null\n  partial:\n    range: Claim\n    annotations:\n      \
+             asserts_value:\n        value:\n          record_slot: record\n          slot_slot: \
+             slot\n  typed:\n    range: Claim\n    annotations:\n      asserts_value:\n        \
+             value:\n          record_slot: record\n          slot_slot: 3\n          value_slot: \
+             value\n  orphan_among:\n    range: Claim\n    annotations:\n      asserts_value:\n        \
+             value:\n          record_slot: ghost\n          slot_slot: slot\n          value_slot: \
+             value\n          among: phantom\n  orphan:\n    range: Claim\n    annotations:\n      \
+             asserts_value:\n        value:\n          record_slot: record\n          slot_slot: \
+             slot\n          value_slot: value\n",
+        );
+        let details: Vec<String> = value_claim_declaration_issues(&schema)
+            .iter()
+            .map(|i| i.message())
+            .collect();
+        let has = |slot: &str, needle: &str| {
+            details
+                .iter()
+                .any(|d| d.contains(&format!("on slot `{slot}`")) && d.contains(needle))
+        };
+        assert!(
+            has("loose", "unrecognized field `extra`"),
+            "an unknown field is named: {details:?}"
+        );
+        assert!(
+            has("bare", "must be a mapping"),
+            "a null value is a defect: {details:?}"
+        );
+        assert!(
+            has("partial", "needs `value_slot`"),
+            "a missing field is named: {details:?}"
+        );
+        assert!(
+            has("typed", "`slot_slot` must be a string"),
+            "a non-string field is named: {details:?}"
+        );
+        assert!(
+            has(
+                "orphan_among",
+                "`record_slot` names `ghost`, which its entry class `Claim` does not carry"
+            ) && has(
+                "orphan_among",
+                "`among` names `phantom`, which `Question` does not carry"
+            ),
+            "named slots the entry class or the container does not carry are each named: \
+             {details:?}"
+        );
+        assert!(
+            has(
+                "stray_claims",
+                "`record_slot` names `record`, which its entry class `Aside` does not carry"
+            ),
+            "only a class under the range that can have records satisfies a named slot, not \
+             an abstract subclass or an unrelated class that carries it: {details:?}"
+        );
+        assert!(
+            has("scalar", "it ranges over `string`, which is not a class")
+                && has("rangeless", "it has no class range"),
+            "a slot whose entries are not records is refused: {details:?}"
+        );
+        assert!(
+            has("orphan", "no class carries this slot"),
+            "an uncarried annotated slot is named: {details:?}"
+        );
+        assert!(
+            !details.iter().any(|d| d.contains("on slot `claims`")),
+            "a well-formed declaration has no defects, judged by the classes that can have \
+             records (not the mixin or abstract class lacking `among`) and satisfied by a slot \
+             specializing `among`: {details:?}"
+        );
+        assert!(
+            !details
+                .iter()
+                .any(|d| d.contains("on slot `family_claims`")
+                    || d.contains("on slot `lonely_claims`")),
+            "an abstract entry class is judged by the classes under it, or by itself when it \
+             has none: {details:?}"
+        );
+        let bindings = value_claim_bindings(&schema);
+        assert!(
+            matches!(
+                bindings.governing(&["Question".to_string()], "bare"),
+                Some(ValueClaim::Malformed)
+            ),
+            "a defective declaration still binds, as uncheckable"
+        );
+        assert_eq!(
+            bindings.governing(&["Question".to_string()], "claims"),
+            Some(&ValueClaim::Of {
+                record_slot: "record".to_string(),
+                slot_slot: "slot".to_string(),
+                value_slot: "value".to_string(),
+                among: Some("anchors".to_string()),
+            }),
+        );
+        assert!(value_claim_bindings(&SchemaDefinition::new("bare")).is_empty());
+    }
+
+    #[test]
+    fn value_claims_read_the_claimed_value_by_the_sibling_slots_range() {
+        let wine = parse(
+            "id: https://example.org/wine\nname: wine\nprefixes:\n  wine: https://example.org/wine/\n  vin: \
+             https://example.org/vin/\ndefault_prefix: wine\nclasses:\n  Cellar:\n    tree_root: true\n    slots: [id, wines, \
+             regions]\n  Wine:\n    slots: [id, color, confidence, vintage, grapes, region, verdict, \
+             blend, homepage, organic, contact, serial]\n  Region:\n    slots: [id]\nenums:\n  Color:\n    permissible_values:\n      \
+             red: {}\n      white: {}\n      rose: {text: blush}\nslots:\n  id: {identifier: true}\n  wines: {range: Wine, \
+             multivalued: true, inlined_as_list: true}\n  regions: {range: Region, multivalued: true, \
+             inlined_as_list: true}\n  color: {range: Color}\n  confidence: {range: float}\n  \
+             vintage: {range: integer}\n  grapes: {range: string, multivalued: true}\n  region: \
+             {range: Region}\n  verdict: {range: string}\n  homepage: {range: uriorcurie}\n  \
+             organic: {range: boolean}\n  contact: {range: uri}\n  serial: {range: integer}\n  blend:\n    any_of:\n      - range: string\n      - range: Region\n",
+        );
+        let full: serde_norway::Value = serde_norway::from_str(
+            "id: cellar\nregions:\n  - {id: medoc}\nwines:\n  - {id: bordeaux, color: red, \
+             confidence: 0.9, vintage: 2018, grapes: [merlot, cabernet], region: medoc, homepage: \
+             'wine:site', organic: true, contact: 'mailto:a@example.org', serial: \
+             9007199254740993}\n  - {id: plain, color: white, confidence: 1, contact: front-desk}\n  - {id: pinkie, color: \
+             blush}\n",
+        )
+        .expect("yaml");
+        let preview: serde_norway::Value =
+            serde_norway::from_str("id: cellar\nwines:\n  - {id: bordeaux, color: white}\n")
+                .expect("yaml");
+        let full = crate::instances::InstanceSet::from_linkml_data(&wine, &full);
+        let both = [
+            full.clone(),
+            crate::instances::InstanceSet::from_linkml_data(&wine, &preview),
+        ];
+        let bench = parse(
+            "id: https://example.org/bench\nname: bench\nprefixes:\n  bench: \
+             https://example.org/bench/\n  wine: https://example.org/wine/\ndefault_prefix: bench\n\
+             classes:\n  Bench:\n    tree_root: true\n    slots: [id, questions, probes, audits, \
+             reviews]\n  Review:\n    slots: [id, citations, expected_values]\n  Audit:\n    slots: \
+             [id, urls, checked_values, broken_values, sighted_values]\n  Probe:\n    \
+             slots: [id, expected_values]\n  Question:\n    \
+             slots: [id, anchors, citations, expected_values]\n  ExpectedValue:\n    slots: [record, \
+             slot, value]\n  DomainRecord:\n    slots: [id]\n  Sighting:\n    slots: [seen, slot, value]\nslots:\n  id: {identifier: true}\n  seen: {range: uriorcurie}\n  sighted_values:\n    range: Sighting\n    multivalued: true\n    inlined_as_list: true\n    annotations:\n      asserts_value:\n        value:\n          record_slot: seen\n          slot_slot: slot\n          value_slot: value\n  \
+             questions: {range: Question, multivalued: true, inlined_as_list: true}\n  probes: \
+             {range: Probe, multivalued: true, inlined_as_list: true}\n  audits: {range: Audit, \
+             multivalued: true, inlined_as_list: true}\n  reviews: {range: Review, multivalued: \
+             true, inlined_as_list: true}\n  urls: {range: uri, multivalued: true}\n  \
+             checked_values:\n    range: ExpectedValue\n    multivalued: true\n    inlined_as_list: \
+             true\n    annotations:\n      asserts_value:\n        value:\n          record_slot: \
+             record\n          slot_slot: slot\n          value_slot: value\n          among: urls\n  \
+             broken_values:\n    range: ExpectedValue\n    multivalued: true\n    inlined_as_list: \
+             true\n    annotations:\n      asserts_value:\n        value: null\n  anchors: \
+             {range: DomainRecord, multivalued: true}\n  citations: {is_a: anchors, range: \
+             DomainRecord, multivalued: true}\n  record: {range: DomainRecord}\n  slot: {range: \
+             string}\n  value: {range: string}\n  expected_values:\n    range: ExpectedValue\n    \
+             multivalued: true\n    inlined_as_list: true\n    annotations:\n      asserts_value:\n        \
+             value:\n          record_slot: record\n          slot_slot: slot\n          \
+             value_slot: value\n          among: anchors\n",
+        );
+        let bindings = value_claim_bindings(&bench);
+        let check_in = |sets: &[crate::instances::InstanceSet], entry: &str| {
+            let data: serde_norway::Value = serde_norway::from_str(&format!(
+                "id: b1\nquestions:\n  - id: q1\n    anchors: [wine:bordeaux, wine:ghost, wine:pinkie]\n    \
+                 citations: [wine:plain]\n    expected_values:\n      - {entry}\n"
+            ))
+            .expect("yaml");
+            let set = crate::instances::InstanceSet::from_linkml_data(&bench, &data);
+            value_claims(
+                &bench,
+                &set,
+                &bindings,
+                &SiblingRecords::index(&[SiblingGraph {
+                    entry: "wine",
+                    schema: &wine,
+                    sets,
+                }]),
+            )
+        };
+        let check = |entry: &str| check_in(std::slice::from_ref(&full), entry);
+
+        for entry in [
+            "{record: wine:bordeaux, slot: color, value: red}",
+            "{record: wine:bordeaux, slot: confidence, value: '0.9'}",
+            "{record: wine:bordeaux, slot: vintage, value: '2018'}",
+            "{record: wine:bordeaux, slot: grapes, value: cabernet}",
+            "{record: wine:bordeaux, slot: region, value: medoc}",
+            "{record: wine:bordeaux, slot: region, value: 'wine:medoc'}",
+            "{record: 'https://example.org/wine/bordeaux', slot: region, value: \
+             'https://example.org/wine/medoc'}",
+            "{record: wine:plain, slot: color, value: white}",
+            "{record: wine:bordeaux, slot: homepage, value: 'https://example.org/wine/site'}",
+            "{record: wine:bordeaux, slot: organic, value: 'True'}",
+            "{record: wine:pinkie, slot: color, value: rose}",
+            "{record: wine:pinkie, slot: color, value: blush}",
+            "{record: wine:bordeaux, slot: contact, value: 'mailto:a@example.org'}",
+            "{record: wine:bordeaux, slot: serial, value: '9007199254740993'}",
+            "{record: wine:plain, slot: confidence, value: '1.0'}",
+            "{record: wine:plain, slot: contact, value: front-desk}",
+        ] {
+            let holds = check(entry);
+            assert_eq!(
+                (holds.claims, holds.failed_claims, holds.uncheckable.len()),
+                (1, 0, 0),
+                "{entry} holds: {holds:?}"
+            );
+        }
+
+        let sighted: serde_norway::Value = serde_norway::from_str(
+            "id: b1\naudits:\n  - id: a2\n    sighted_values:\n      - {seen: 'wine:bordeaux', \
+             slot: color, value: red}\n",
+        )
+        .expect("yaml");
+        let sighted = value_claims(
+            &bench,
+            &crate::instances::InstanceSet::from_linkml_data(&bench, &sighted),
+            &bindings,
+            &SiblingRecords::index(&[SiblingGraph {
+                entry: "wine",
+                schema: &wine,
+                sets: std::slice::from_ref(&full),
+            }]),
+        );
+        assert_eq!(
+            (
+                sighted.claims,
+                sighted.failed_claims,
+                sighted.uncheckable.len()
+            ),
+            (1, 0, 0),
+            "a record named by a scalar IRI or CURIE is read like a reference: {sighted:?}"
+        );
+
+        let failure = |entry: &str| {
+            let failed = check(entry);
+            assert_eq!(
+                (
+                    failed.claims,
+                    failed.failed_claims,
+                    failed.uncheckable.len()
+                ),
+                (1, 1, 0),
+                "{entry} is evaluated and fails: {failed:?}"
+            );
+            failed.failures
+        };
+        let kinds = |failures: &[FailedValueClaim]| {
+            failures.iter().map(|f| f.kind.clone()).collect::<Vec<_>>()
+        };
+        let differs = |actual: &[&str]| ValueClaimFailureKind::Differs {
+            sibling: "wine".to_string(),
+            actual: actual.iter().map(|a| a.to_string()).collect(),
+        };
+        let wrong_color = failure("{record: wine:bordeaux, slot: color, value: white}");
+        assert_eq!(kinds(&wrong_color), [differs(&["red"])]);
+        assert_eq!(
+            wrong_color[0].message(),
+            "value claim `q1.expected_values[0]`: claims https://example.org/wine/bordeaux \
+             carries `white` at `color`, but in `wine` it carries `red`"
+        );
+        assert_eq!(
+            kinds(&failure(
+                "{record: wine:bordeaux, slot: confidence, value: '0.85'}"
+            )),
+            [differs(&["0.9"])]
+        );
+        assert_eq!(
+            kinds(&failure(
+                "{record: wine:bordeaux, slot: organic, value: 'false'}"
+            )),
+            [differs(&["true"])]
+        );
+        assert_eq!(
+            kinds(&failure(
+                "{record: wine:bordeaux, slot: serial, value: '9007199254740992'}"
+            )),
+            [differs(&["9007199254740993"])],
+            "integers compare exactly, past the range a float holds"
+        );
+        assert_eq!(
+            kinds(&failure(
+                "{record: wine:bordeaux, slot: contact, value: 'mailto:b@example.org'}"
+            )),
+            [differs(&["mailto:a@example.org"])],
+            "a scheme neither schema declares as a prefix is compared as written"
+        );
+        assert_eq!(
+            kinds(&failure(
+                "{record: wine:bordeaux, slot: grapes, value: syrah}"
+            )),
+            [differs(&["merlot", "cabernet"])],
+            "a value missing from a multivalued slot lists every value the record carries"
+        );
+        let unset = failure("{record: wine:plain, slot: verdict, value: good}");
+        assert_eq!(
+            kinds(&unset),
+            [ValueClaimFailureKind::Unset {
+                sibling: "wine".to_string()
+            }]
+        );
+        assert!(
+            unset[0]
+                .message()
+                .ends_with("but in `wine` it carries no value there"),
+            "{}",
+            unset[0].message()
+        );
+        let uncarried = failure("{record: wine:bordeaux, slot: body, value: full}");
+        assert_eq!(
+            kinds(&uncarried),
+            [ValueClaimFailureKind::SlotNotCarried {
+                sibling: "wine".to_string(),
+                class: "Wine".to_string()
+            }]
+        );
+        assert!(
+            uncarried[0]
+                .message()
+                .ends_with("but `body` is not a slot of its class `Wine` in `wine`"),
+            "{}",
+            uncarried[0].message()
+        );
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nquestions:\n  - id: q1\n    anchors: [wine:plain]\n    expected_values:\n      \
+             - {record: wine:bordeaux, slot: color, value: red}\n      - {record: wine:bordeaux, \
+             slot: color, value: purple}\nprobes:\n  - id: p1\n    expected_values:\n      - \
+             {record: wine:bordeaux, slot: color, value: red}\naudits:\n  - id: a1\n    urls: \
+             ['https://example.org/wine/bordeaux']\n    checked_values:\n      - {record: \
+             wine:bordeaux, slot: color, value: red}\n    broken_values:\n      - {record: \
+             wine:bordeaux, slot: color, value: red}\n",
+        )
+        .expect("yaml");
+        let set = crate::instances::InstanceSet::from_linkml_data(&bench, &data);
+        let not_among = value_claims(
+            &bench,
+            &set,
+            &bindings,
+            &SiblingRecords::index(&[SiblingGraph {
+                entry: "wine",
+                schema: &wine,
+                sets: std::slice::from_ref(&full),
+            }]),
+        );
+        let not_among_q1 = ValueClaimFailureKind::NotAmong {
+            container: "q1".to_string(),
+            among: "anchors".to_string(),
+        };
+        assert_eq!(
+            (
+                not_among.claims,
+                not_among.failed_claims,
+                not_among
+                    .failures
+                    .iter()
+                    .map(|f| (f.entry.as_str(), f.kind.clone()))
+                    .collect::<Vec<_>>()
+            ),
+            (
+                3,
+                2,
+                vec![
+                    ("q1.expected_values[0]", not_among_q1.clone()),
+                    ("q1.expected_values[1]", not_among_q1)
+                ]
+            ),
+            "a record outside the anchors fails, whether its value agrees or cannot be read, \
+             and one among a uri-ranged `among` holds: {not_among:?}"
+        );
+        assert_eq!(
+            not_among.failures[0].message(),
+            "value claim `q1.expected_values[0]`: https://example.org/wine/bordeaux is not among \
+             `q1`'s `anchors`"
+        );
+        let mut uncheckable_entries: Vec<String> =
+            not_among.uncheckable.iter().map(|u| u.message()).collect();
+        uncheckable_entries.sort();
+        assert_eq!(
+            uncheckable_entries,
+            [
+                "value claim `a1.broken_values[0]` could not be checked: the declaration is \
+                 defective (see the schema's load warnings)",
+                "value claim `p1.expected_values[0]` could not be checked: `p1`'s class does not \
+                 carry `anchors`, so whether the record is among it cannot be decided"
+            ],
+            "a defective declaration, and a container that cannot hold `among`, leave the \
+             claim uncheckable, not failed"
+        );
+
+        let shared = check_in(&both, "{record: wine:bordeaux, slot: color, value: red}");
+        assert_eq!(
+            (shared.claims, shared.failed_claims, kinds(&shared.failures)),
+            (1, 1, vec![differs(&["white"])]),
+            "a record two sibling datasets mint must agree in each: {shared:?}"
+        );
+
+        let uncheckable = |entry: &str| {
+            let out = check(entry);
+            assert_eq!(
+                (out.claims, out.uncheckable.len()),
+                (0, 1),
+                "{entry} is uncheckable: {out:?}"
+            );
+            out.uncheckable[0].message()
+        };
+        for (entry, reason) in [
+            (
+                "{record: wine:bordeaux, slot: confidence, value: zero point nine}",
+                "`zero point nine` is not a number",
+            ),
+            (
+                "{record: wine:bordeaux, slot: vintage, value: '2018.5'}",
+                "`2018.5` is not an integer",
+            ),
+            (
+                "{record: wine:bordeaux, slot: color, value: purple}",
+                "`purple` is not a permissible value of `Color`",
+            ),
+            (
+                "{record: wine:bordeaux, slot: confidence, value: 0.9}",
+                "is a number, not a string — quote it",
+            ),
+            (
+                "{record: wine:bordeaux, slot: color, value: true}",
+                "is a boolean, not a string — quote it",
+            ),
+            (
+                "{record: wine:ghost, slot: color, value: red}",
+                "https://example.org/wine/ghost resolves to no sibling record",
+            ),
+            (
+                "{record: wine:bordeaux, slot: color}",
+                "the entry carries no `value`",
+            ),
+            ("{slot: color, value: red}", "the entry carries no `record`"),
+            (
+                "{record: wine:bordeaux, slot: organic, value: maybe}",
+                "`maybe` is not a boolean",
+            ),
+            (
+                "{record: [wine:bordeaux, wine:plain], slot: color, value: red}",
+                "several `record` values",
+            ),
+            (
+                "{record: wine:bordeaux, slot: color, value: [red, white]}",
+                "`value` has several values",
+            ),
+            (
+                "{record: wine:bordeaux, slot: {a: 1}, value: red}",
+                "`slot` is not a string",
+            ),
+            (
+                "{record: true, slot: color, value: red}",
+                "`record` is not a reference or IRI",
+            ),
+            (
+                "{record: wine:bordeaux, slot: blend, value: merlot}",
+                "`blend` has alternative ranges",
+            ),
+            (
+                "{record: wine:bordeaux, slot: homepage, value: 'vin:site'}",
+                "`vin:site` uses the prefix `vin`, which this schema does not declare",
+            ),
+            (
+                "{record: wine:bordeaux, slot: region, value: 'nope:medoc'}",
+                "`nope:medoc` uses the prefix `nope`, which this schema does not declare",
+            ),
+        ] {
+            let message = uncheckable(entry);
+            assert!(
+                message.starts_with("value claim `q1.expected_values[0]` could not be checked: ")
+                    && message.contains(reason),
+                "{entry}: expected `{reason}` in {message}"
+            );
+        }
+        for (entry, named, reason) in [
+            ("red", "red", "the entry names no record of this dataset"),
+            ("true", "q1.expected_values[0]", "the entry is not a record"),
+        ] {
+            let message = uncheckable(entry);
+            assert_eq!(
+                message,
+                format!("value claim `{named}` could not be checked: {reason}"),
+                "an entry that is not a record of this dataset is uncheckable"
+            );
+        }
+
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nreviews:\n  - id: r1\n    citations: [wine:plain]\n    expected_values:\n      \
+             - {record: wine:plain, slot: color, value: white}\n      - {record: wine:bordeaux, \
+             slot: color, value: red}\n",
+        )
+        .expect("yaml");
+        let set = crate::instances::InstanceSet::from_linkml_data(&bench, &data);
+        let specialized = value_claims(
+            &bench,
+            &set,
+            &bindings,
+            &SiblingRecords::index(&[SiblingGraph {
+                entry: "wine",
+                schema: &wine,
+                sets: std::slice::from_ref(&full),
+            }]),
+        );
+        assert_eq!(
+            (
+                specialized.claims,
+                specialized.uncheckable.len(),
+                specialized
+                    .failures
+                    .iter()
+                    .map(|f| (f.entry.as_str(), f.kind.clone()))
+                    .collect::<Vec<_>>()
+            ),
+            (
+                2,
+                0,
+                vec![(
+                    "r1.expected_values[1]",
+                    ValueClaimFailureKind::NotAmong {
+                        container: "r1".to_string(),
+                        among: "anchors".to_string(),
+                    }
+                )]
+            ),
+            "a container carrying only a slot that specializes `among` is checked against it: \
+             {specialized:?}"
+        );
+
+        // Key-identified records scope under their dataset's root, so two
+        // datasets each hold their own `p1`.
+        let estate = parse(
+            "id: https://example.org/estate\nname: estate\nprefixes:\n  estate: \
+             https://example.org/estate/\ndefault_prefix: estate\nclasses:\n  Estate:\n    \
+             tree_root: true\n    slots: [id, plots, vines]\n  Plot:\n    slots: [name]\n  Vine:\n    \
+             slots: [name, plot]\nslots:\n  id: {identifier: true}\n  name: {key: true}\n  plots: \
+             {range: Plot, multivalued: true, inlined_as_list: true}\n  vines: {range: Vine, \
+             multivalued: true, inlined_as_list: true}\n  plot: {range: Plot}\n",
+        );
+        let estates = [
+            "id: north\nplots:\n  - {name: p1}\n  - {name: p7}\nvines:\n  - {name: v1, plot: p1}\n",
+            "id: south\nplots:\n  - {name: p1}\nvines:\n  - {name: v1, plot: p1}\n  - {name: v2, \
+             plot: p7}\n",
+            "id: east\nvines:\n  - {name: v4, plot: p1}\n",
+        ]
+        .map(|yaml| scoped_set(&estate, yaml));
+        let data: serde_norway::Value = serde_norway::from_str(
+            &"id: b1\naudits:\n  - id: a1\n    urls: [E/north/v1, E/south/v1, E/south/v2, \
+              E/east/v4]\n    checked_values:\n      - {record: E/north/v1, slot: plot, value: \
+              E/north/p1}\n      - {record: E/north/v1, slot: plot, value: p1}\n      - {record: \
+              E/south/v1, slot: plot, value: E/north/p1}\n      - {record: E/south/v2, slot: plot, \
+              value: E/north/p7}\n      - {record: E/east/v4, slot: plot, value: E/north/p1}\n      \
+              - {record: E/east/v4, slot: plot, value: E/p1}\n"
+                .replace("E/", "https://example.org/estate/"),
+        )
+        .expect("yaml");
+        let set = crate::instances::InstanceSet::from_linkml_data(&bench, &data);
+        let scoped = value_claims(
+            &bench,
+            &set,
+            &bindings,
+            &SiblingRecords::index(&[SiblingGraph {
+                entry: "estate",
+                schema: &estate,
+                sets: &estates,
+            }]),
+        );
+        let other_plot = ValueClaimFailureKind::Differs {
+            sibling: "estate".to_string(),
+            actual: vec!["p1".to_string()],
+        };
+        assert_eq!(
+            (
+                scoped.claims,
+                scoped.uncheckable.len(),
+                scoped
+                    .failures
+                    .iter()
+                    .map(|f| (f.entry.as_str(), f.kind.clone()))
+                    .collect::<Vec<_>>()
+            ),
+            (
+                6,
+                0,
+                vec![
+                    ("a1.checked_values[2]", other_plot.clone()),
+                    ("a1.checked_values[4]", other_plot)
+                ]
+            ),
+            "a reference is read in the dataset that states it, then as the one record of \
+             that id among the sibling's datasets, then as the id's plain expansion: {scoped:?}"
+        );
+    }
+
     /// A malformed absence declaration warns instead of silently
     /// narrowing or widening the check: an unknown field is named, a
     /// `via_slot` no class carries is named (and the binding stays,
@@ -5460,23 +6928,26 @@ classes:
         };
         assert_eq!(blocking.total(), 63, "each family counts once, added");
 
-        // One absence defect (uncarried annotated slot) and one expansion
-        // defect (self-reference): the shared category counts both.
+        // One defect per family (an uncarried absence slot, a
+        // self-referencing expansion and pin, a null value claim): the
+        // shared category counts each.
         let schema = parse(
-            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor, pinned]\nslots:\n  \
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor, pinned, \
+             claims]\nslots:\n  \
              anchor:\n    range: uri\n    annotations:\n      expand_against: anchor\n  \
              pinned:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          \
              sibling_slot: pinned\n  \
+             claims:\n    range: string\n    annotations:\n      asserts_value:\n        value: null\n  \
              orphan:\n    range: uri\n    annotations:\n      asserts_absence:\n        value: \
              null\n",
         );
         assert_eq!(
             strict_blocking(&schema).slot_semantics,
-            3,
+            SLOT_SEMANTICS_FAMILIES.len(),
             "one defect from each declaration family, summed"
         );
         let load = schema_load_diagnostics(&schema);
-        for family in ["asserts_absence", "expand_against", "records_version_of"] {
+        for family in SLOT_SEMANTICS_FAMILIES.iter().map(|f| f.annotation) {
             assert!(
                 load.iter().any(|m| m.contains(family)),
                 "a defective `{family}` declaration is a load warning; got: {load:?}"
@@ -5728,7 +7199,7 @@ classes:
             &schema,
             &set,
             &declarations,
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             (
@@ -5779,7 +7250,7 @@ classes:
             &schema,
             &set,
             &declarations,
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 1);
         assert!(
@@ -5814,7 +7285,7 @@ classes:
             &schema,
             &set,
             &declarations,
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             found.claims, 0,
@@ -5845,7 +7316,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("unconnected", Some("ghost")),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             found.claims, 0,
@@ -5903,7 +7374,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 1);
         assert_eq!(
@@ -5933,7 +7404,7 @@ classes:
                 &schema,
                 &set,
                 &AbsenceBindings::schema_wide("anchors", None),
-                &[(&sibling_schema, std::slice::from_ref(&sibling))],
+                &[sibling_graph(&sibling_schema, &sibling)],
             )
             .unverified,
             vec![],
@@ -5955,7 +7426,7 @@ classes:
                 &schema,
                 &joined_via_link,
                 &AbsenceBindings::schema_wide("anchors", Some("via")),
-                &[(&sibling_schema, std::slice::from_ref(&sibling))],
+                &[sibling_graph(&sibling_schema, &sibling)],
             )
             .unverified
             .len(),
@@ -5971,7 +7442,7 @@ classes:
                 &schema,
                 &narrowed_elsewhere,
                 &AbsenceBindings::schema_wide("anchors", Some("via")),
-                &[(&sibling_schema, std::slice::from_ref(&sibling))],
+                &[sibling_graph(&sibling_schema, &sibling)],
             )
             .unverified,
             vec![],
@@ -5987,7 +7458,7 @@ classes:
                 &schema,
                 &named_via,
                 &AbsenceBindings::schema_wide("anchors", Some("via")),
-                &[(&sibling_schema, std::slice::from_ref(&sibling))],
+                &[sibling_graph(&sibling_schema, &sibling)],
             )
             .unverified
             .len(),
@@ -6026,7 +7497,7 @@ classes:
                 &schema,
                 &scoped_set(&schema, claim),
                 &AbsenceBindings::schema_wide("anchors", via),
-                &[(&sibling_schema, std::slice::from_ref(&sibling))],
+                &[sibling_graph(&sibling_schema, &sibling)],
             )
             .unverified
             .into_iter()
@@ -6068,10 +7539,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("unconnected", None),
-            &[(
-                &sibling_schema,
-                std::slice::from_ref(&uncovered_pair_joined),
-            )],
+            &[sibling_graph(&sibling_schema, &uncovered_pair_joined)],
         );
         assert_eq!(holds.claims, 1);
         assert_eq!(
@@ -6089,7 +7557,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("unconnected", None),
-            &[(&sibling_schema, std::slice::from_ref(&claimed_pair_joined))],
+            &[sibling_graph(&sibling_schema, &claimed_pair_joined)],
         );
         assert_eq!(
             contradicted.unverified.len(),
@@ -6114,7 +7582,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", Some("via")),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             found.unverified.len(),
@@ -6137,7 +7605,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", Some("via")),
-            &[(&renamed_sibling, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&renamed_sibling, &sibling)],
         );
         assert_eq!(
             found.unverified.len(),
@@ -6163,7 +7631,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", Some("via")),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 0);
         assert_eq!(
@@ -6186,7 +7654,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", Some("via")),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 0);
         assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
@@ -6205,7 +7673,7 @@ classes:
             &schema,
             &bad_via,
             &AbsenceBindings::schema_wide("anchors", Some("via")),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 0);
         assert_eq!(
@@ -6239,7 +7707,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.unverified, vec![], "no false contradiction");
         assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
@@ -6259,7 +7727,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 0);
         assert_eq!(
@@ -6277,7 +7745,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 0);
         assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
@@ -6298,7 +7766,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 0);
         assert_eq!(
@@ -6321,7 +7789,7 @@ classes:
             &schema,
             &bad_anchor,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 0);
         assert_eq!(found.unverified, vec![], "no claim to contradict");
@@ -6350,7 +7818,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("unconnected_iris", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 1);
         assert_eq!(found.unverified.len(), 1, "l1 joins them; got: {found:?}");
@@ -6382,7 +7850,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             found.unverified.len(),
@@ -6406,8 +7874,8 @@ classes:
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
             &[
-                (&sibling_schema, std::slice::from_ref(&first)),
-                (&sibling_schema, std::slice::from_ref(&second)),
+                sibling_graph(&sibling_schema, &first),
+                sibling_graph(&sibling_schema, &second),
             ],
         );
         assert_eq!(found.claims, 1);
@@ -6426,7 +7894,7 @@ classes:
             &schema,
             &contradicted,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 1, "one anchor is a checkable claim");
         assert_eq!(
@@ -6445,7 +7913,7 @@ classes:
             &schema,
             &holds,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 1);
         assert_eq!(
@@ -6462,7 +7930,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", Some("via")),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 1);
         assert_eq!(
@@ -6519,7 +7987,7 @@ classes:
             &schema,
             &held_only,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(found.claims, 1);
         assert_eq!(
@@ -6533,7 +8001,7 @@ classes:
             &schema,
             &referenced,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             found.unverified.len(),
@@ -6551,7 +8019,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             found.unverified.len(),
@@ -6581,7 +8049,7 @@ classes:
             &schema,
             &set,
             &AbsenceBindings::schema_wide("anchors", None),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            &[sibling_graph(&sibling_schema, &sibling)],
         );
         assert_eq!(
             found.unverified.len(),

@@ -19,7 +19,7 @@ Without a library boundary, such a tool reads panschema's Turtle
 projection back through an RDF store. That is the failure ADR-003 exists
 to prevent: a second, lossy reader. The projection drops the
 schema-declared slot semantics (`expand_against`, `asserts_absence`,
-`records_version_of`) and class `rules`.
+`records_version_of`, `asserts_value`) and class `rules`.
 
 ### What crosses the boundary today (measured 2026-09-05)
 

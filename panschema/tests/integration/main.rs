@@ -3696,12 +3696,12 @@ resolve_against = ["catalog"]
     );
 }
 
-/// The schema-declared absence claim end to end: the `asserts_absence`
-/// annotation on the slot drives the check — holds, contradicted,
-/// `--strict`-refused — and a manifest still carrying the retired
-/// `verify_absences` key is refused.
+/// Schema-declared slot semantics end to end: each annotation on its
+/// slot drives its check — holds, contradicted, `--strict`-refused, for
+/// absence claims, version pins, and value claims alike — and a manifest
+/// still carrying the retired `verify_absences` key is refused.
 #[test]
-fn schema_declared_absence_claims_are_checked() {
+fn schema_declared_slot_semantics_are_checked() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
@@ -3711,7 +3711,7 @@ fn schema_declared_absence_claims_are_checked() {
         "catalog",
         "1.0.0",
         "catalog.yaml",
-        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers, pairings]\n  Provider:\n    slots: [id]\n  Pairing:\n    slots: [id, a, b]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n  pairings: {range: Pairing, multivalued: true, inlined_as_list: true}\n  a: {range: Provider}\n  b: {range: Provider}\n",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers, pairings]\n  Provider:\n    slots: [id, tier]\n  Pairing:\n    slots: [id, a, b]\nenums:\n  Tier:\n    permissible_values:\n      gold: {}\n      silver: {}\nslots:\n  id: {identifier: true}\n  tier: {range: Tier}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n  pairings: {range: Pairing, multivalued: true, inlined_as_list: true}\n  a: {range: Provider}\n  b: {range: Provider}\n",
     );
 
     let bench_pkg = consumer.join("bench-pkg");
@@ -3720,19 +3720,22 @@ fn schema_declared_absence_claims_are_checked() {
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, target, target_version, questions]\n  Question:\n    slots: [id, unconnected, unreferenced]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  target: {range: string}\n  target_version:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          sibling_slot: target\n  questions: {range: Question, multivalued: true, inlined_as_list: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n  unreferenced:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, target, target_version, questions]\n  Question:\n    slots: [id, unconnected, unreferenced, expected_values]\n  ExpectedValue:\n    slots: [record, slot, value]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  record: {range: DomainRecord}\n  slot: {range: string}\n  value: {range: string}\n  expected_values:\n    range: ExpectedValue\n    multivalued: true\n    inlined_as_list: true\n    annotations:\n      asserts_value:\n        value:\n          record_slot: record\n          slot_slot: slot\n          value_slot: value\n          among: unconnected\n  target: {range: string}\n  target_version:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          sibling_slot: target\n  questions: {range: Question, multivalued: true, inlined_as_list: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n  unreferenced:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
     );
 
     fs::write(
         consumer.join("catalog-data.yaml"),
-        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\n  - {id: silent}\n",
+        "id: est1\nproviders:\n  - {id: aws, tier: gold}\n  - {id: gcp}\n  - {id: silent}\n",
     )
     .unwrap();
-    fs::write(
-        consumer.join("bench-data.yaml"),
-        "id: b1\ntarget: catalog\ntarget_version: 1.0.0\nquestions:\n  - {id: q1, unconnected: [cat:aws, cat:gcp], unreferenced: [cat:silent]}\n",
-    )
-    .unwrap();
+    let bench_data = |claimed_tier: &str| {
+        format!(
+            "id: b1\ntarget: catalog\ntarget_version: 1.0.0\nquestions:\n  - {{id: q1, \
+             unconnected: [cat:aws, cat:gcp], unreferenced: [cat:silent], expected_values: \
+             [{{record: cat:aws, slot: tier, value: {claimed_tier}}}]}}\n"
+        )
+    };
+    fs::write(consumer.join("bench-data.yaml"), bench_data("gold")).unwrap();
     fs::write(
         consumer.join("panschema.toml"),
         r#"
@@ -3782,6 +3785,76 @@ resolve_against = ["catalog"]
         "the container's version pin is checked and counted; got:\n{}",
         String::from_utf8_lossy(&holds.stderr)
     );
+    assert!(
+        String::from_utf8_lossy(&holds.stderr)
+            .contains("1 of 1 value claim(s) hold against `catalog`"),
+        "the question's value claim is checked and counted; got:\n{}",
+        String::from_utf8_lossy(&holds.stderr)
+    );
+
+    // A claimed value the sibling record does not carry warns naming the
+    // entry and what the sibling holds, and fails under --strict.
+    fs::write(consumer.join("bench-data.yaml"), bench_data("silver")).unwrap();
+    let wrong_value = run(&[]);
+    let stderr = String::from_utf8_lossy(&wrong_value.stderr);
+    assert_eq!(
+        wrong_value.status.code(),
+        Some(0),
+        "without --strict a failing value claim is a warning; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "value claim `q1.expected_values[0]`: claims https://example.org/catalog/aws \
+             carries `silver` at `tier`, but in `catalog` it carries `gold`"
+        ),
+        "a wrong value warns naming the entry, the claim, and the sibling's value; got:\n{stderr}"
+    );
+    let strict = run(&["--strict"]);
+    assert_eq!(
+        (
+            strict.status.code(),
+            String::from_utf8_lossy(&strict.stderr).contains("1 value claim(s) do not hold")
+        ),
+        (FOUND, true),
+        "a failing value claim fails --strict; got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+
+    // With no absence claim declared, value claims still read the
+    // sibling's records; a value the slot's range cannot read is
+    // uncheckable, which --strict refuses.
+    {
+        let bench_schema_path = bench_pkg.join("bench.yaml");
+        let bench_schema = fs::read_to_string(&bench_schema_path).unwrap();
+        let absence = "    annotations:\n      asserts_absence:\n        value: null\n";
+        assert_eq!(bench_schema.matches(absence).count(), 2);
+        fs::write(&bench_schema_path, bench_schema.replace(absence, "")).unwrap();
+        fs::write(consumer.join("bench-data.yaml"), bench_data("gold")).unwrap();
+        let value_only = run(&["--strict"]);
+        let stderr = String::from_utf8_lossy(&value_only.stderr);
+        assert_eq!(
+            (
+                value_only.status.code(),
+                stderr.contains("1 of 1 value claim(s) hold against `catalog`")
+            ),
+            (Some(0), true),
+            "value claims are checked when they are the only claims declared; got:\n{stderr}"
+        );
+        fs::write(consumer.join("bench-data.yaml"), bench_data("bronze")).unwrap();
+        let unreadable = run(&["--strict"]);
+        let stderr = String::from_utf8_lossy(&unreadable.stderr);
+        assert_eq!(
+            (
+                unreadable.status.code(),
+                stderr.contains("`bronze` is not a permissible value of `Tier`"),
+                stderr.contains("1 value claim(s) could not be checked")
+            ),
+            (FOUND, true, true),
+            "an unreadable value is uncheckable and fails --strict; got:\n{stderr}"
+        );
+        fs::write(&bench_schema_path, bench_schema).unwrap();
+    }
+    fs::write(consumer.join("bench-data.yaml"), bench_data("gold")).unwrap();
 
     // The catalog moves on without the benchmark: its pin no longer
     // agrees, which warns, and fails under --strict.
@@ -3819,7 +3892,7 @@ resolve_against = ["catalog"]
     // A pairing joining the two anchors contradicts the claim.
     fs::write(
         consumer.join("catalog-data.yaml"),
-        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\n  - {id: silent}\npairings:\n  - {id: p1, a: aws, b: gcp}\n",
+        "id: est1\nproviders:\n  - {id: aws, tier: gold}\n  - {id: gcp}\n  - {id: silent}\npairings:\n  - {id: p1, a: aws, b: gcp}\n",
     )
     .unwrap();
     let contradicted = run(&[]);
@@ -3906,10 +3979,11 @@ instances = ["bench-data.yaml"]
         "declared-but-unverified claims are a note, not an error: {}",
         String::from_utf8_lossy(&unverified.stderr)
     );
+    let stderr = String::from_utf8_lossy(&unverified.stderr);
     assert!(
-        String::from_utf8_lossy(&unverified.stderr).contains("declares 2 absence-claim slot(s)"),
-        "the note counts the unverified declarations; got:\n{}",
-        String::from_utf8_lossy(&unverified.stderr)
+        stderr.contains("declares 2 absence-claim slot(s)")
+            && stderr.contains("declares 1 value-claim slot(s)"),
+        "the note counts each family's unverified declarations; got:\n{stderr}"
     );
 
     // A defective pin declaration is a load warning the strict gate refuses.

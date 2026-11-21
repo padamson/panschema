@@ -1188,16 +1188,9 @@ fn numeric_value(value: &InstanceValue) -> Option<f64> {
     }
 }
 
-/// A value's display form for violation messages — the scalar's display
-/// or a reference's target id. Display only: values compare through
-/// [`values_match`] so kinds stay distinct even when displays collide.
-pub(crate) fn value_display(value: &InstanceValue) -> String {
-    match value {
-        InstanceValue::Scalar(s) => scalar_to_display(s),
-        InstanceValue::Reference { target, .. } => target.clone(),
-        InstanceValue::Unexpected(kind) => kind.to_string(),
-    }
-}
+// Display only: values compare through `values_match`, so kinds stay
+// distinct even when displays collide.
+pub(crate) use crate::instances::value_display;
 
 /// The failure message for an unmet equals condition, phrased by how many
 /// values the slot held — references and other non-scalars count and

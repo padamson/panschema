@@ -152,11 +152,31 @@ fn every_generate_manifest_key_is_documented() {
              from the manifest reference"
         );
     }
-    for annotation in ["asserts_absence", "expand_against", "records_version_of"] {
+    for annotation in panschema::diagnostics::SLOT_SEMANTICS_FAMILIES
+        .iter()
+        .map(|family| family.annotation)
+    {
         assert!(
             doc.contains(annotation),
             "schema-declared semantic `{annotation}` is read by the loader but absent \
              from the manifest reference"
+        );
+    }
+    let value_claims = doc
+        .lines()
+        .find(|line| line.contains("`asserts_value`"))
+        .expect("the manifest reference has a row for `asserts_value`");
+    for field in panschema::diagnostics::VALUE_CLAIM_FIELDS {
+        assert!(
+            value_claims.contains(&format!("{field}: <slot>")),
+            "`asserts_value` takes `{field}`, which its row in the manifest reference does \
+             not show in the value's shape"
+        );
+    }
+    for verdict in ["A claim fails", "reported uncheckable", "never as holding"] {
+        assert!(
+            value_claims.contains(verdict),
+            "the `asserts_value` row no longer states the verdict `{verdict}`"
         );
     }
 }

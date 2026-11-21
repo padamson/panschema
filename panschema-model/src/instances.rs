@@ -202,6 +202,16 @@ pub struct Instance {
     pub anonymous: bool,
 }
 
+impl Instance {
+    /// Every authored value at `slot`, across however many entries carry it.
+    pub fn values_at<'a>(&'a self, slot: &'a str) -> impl Iterator<Item = &'a InstanceValue> {
+        self.slot_values
+            .iter()
+            .filter(move |sv| sv.slot == slot)
+            .flat_map(|sv| &sv.values)
+    }
+}
+
 /// Why a union-ranged entry chose no member, phrased to follow
 /// "entry `k` …" — one spelling for every reporting site.
 const UNION_AMBIGUITY_REASON: &str = "names no single class of the union range — give it a \
@@ -2546,6 +2556,17 @@ fn scalar_value(value: &serde_norway::Value) -> Option<ScalarValue> {
     }
 }
 
+/// A value's display form for messages — the scalar's display or a
+/// reference's target id. Display only: two values whose displays collide
+/// are not thereby the same value.
+pub fn value_display(value: &InstanceValue) -> String {
+    match value {
+        InstanceValue::Scalar(s) => scalar_to_display(s),
+        InstanceValue::Reference { target, .. } => target.clone(),
+        InstanceValue::Unexpected(kind) => kind.to_string(),
+    }
+}
+
 /// Render a typed scalar as its display string.
 pub fn scalar_to_display(value: &ScalarValue) -> String {
     match value {
@@ -2628,6 +2649,20 @@ pub fn instance_iris_by_id<'a>(
         .flat_map(|set| &set.instances)
         .filter_map(|i| Some((i.id.as_str(), instance_iri_string(schema, i)?)))
         .collect()
+}
+
+/// The IRI a reference `target` denotes in a dataset: the record's
+/// minted IRI from [`instance_iris_by_id`] when the dataset holds it
+/// (scoping included), else the target's expansion against `schema`.
+pub fn reference_target_iri(
+    by_id: &std::collections::BTreeMap<&str, String>,
+    schema: &SchemaDefinition,
+    target: &str,
+) -> String {
+    by_id
+        .get(target)
+        .cloned()
+        .unwrap_or_else(|| crate::linkml_resolve::resolve_reference_iri(schema, target))
 }
 
 /// The namespace a schema's instance minting expands bare ids under —

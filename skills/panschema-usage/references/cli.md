@@ -47,7 +47,7 @@ Rust's default, and is a bug in panschema.
   constructs, dangling references, colliding slot definitions (the same
   slot name defined at several sites, which would mint one RDF property
   IRI), untyped slots, rule constants that name no permissible value of
-  their slot's enum, defective `asserts_absence`/`expand_against`/`records_version_of` declarations,
+  their slot's enum, defective `asserts_absence`/`expand_against`/`records_version_of`/`asserts_value` declarations,
   and instance-data violations. It does *not* promote
   unprojected-construct, Postgres-skip, or SHACL-skip warnings to errors.
 - **Pointing at a record in another graph.** In instance data, a

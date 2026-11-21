@@ -69,7 +69,7 @@ fn load_warnings_are_returned_as_values_and_are_the_load_diagnostics() {
 }
 
 #[test]
-fn the_three_slot_semantics_families_are_readable_as_data() {
+fn every_slot_semantics_family_is_readable_as_data() {
     let mut names: Vec<&str> = SLOT_SEMANTICS_FAMILIES
         .iter()
         .map(|f| f.annotation)
@@ -77,7 +77,12 @@ fn the_three_slot_semantics_families_are_readable_as_data() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["asserts_absence", "expand_against", "records_version_of"],
+        [
+            "asserts_absence",
+            "asserts_value",
+            "expand_against",
+            "records_version_of"
+        ],
         "every schema-declared slot-semantics family is enumerable"
     );
 }

@@ -409,7 +409,9 @@ fn dep_paths(
 /// declares claims nothing verifies gets a note here. Version pins
 /// (`records_version_of` slot annotations) are checked the same way
 /// against the version each sibling resolved to, which resolution
-/// already recorded, so no sibling is resolved twice. Findings warn as
+/// already recorded, so no sibling is resolved twice, and value claims
+/// (`asserts_value` slot annotations) against the sibling records they
+/// name, read from the same sibling graphs the absence pass loads. Findings warn as
 /// they stream; the returned problem summaries are what a caller's
 /// `--strict` promotes, so one entry's findings never hide another's. A
 /// sibling naming no `[schemas]` entry, or the entry itself, is a
@@ -436,6 +438,9 @@ fn check_resolve_against(
     // notes are exactly about the early-return cases.)
     let bindings = panschema::diagnostics::absence_bindings(schema);
     let pins = panschema::diagnostics::version_bindings(schema);
+    let value_claims = panschema::diagnostics::value_claim_bindings(schema);
+    // Only the absence and value-claim passes read the sibling records.
+    let keep_sibling_graphs = !bindings.is_empty() || !value_claims.is_empty();
     let unverified_note = || {
         for family in panschema::diagnostics::SLOT_SEMANTICS_FAMILIES {
             let Some(declared) = family.declared else {
@@ -468,8 +473,8 @@ fn check_resolve_against(
 
     let mut owned_namespaces: Vec<String> = Vec::new();
     let mut minted: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    // Retained only for the absence pass, which is the only reader.
     let mut sibling_graphs: Vec<(
+        &str,
         panschema::linkml::SchemaDefinition,
         Vec<panschema::instances::InstanceSet>,
     )> = Vec::new();
@@ -537,27 +542,34 @@ fn check_resolve_against(
                 &sibling_schema,
                 std::slice::from_ref(&set),
             ));
-            if !bindings.is_empty() {
+            if keep_sibling_graphs {
                 sibling_sets.push(set);
             }
         }
         owned_namespaces.push(panschema::instances::instance_namespace(&sibling_schema));
-        if !bindings.is_empty() {
-            sibling_graphs.push((sibling_schema, sibling_sets));
+        if keep_sibling_graphs {
+            sibling_graphs.push((sibling, sibling_schema, sibling_sets));
         }
     }
-    let siblings: Vec<(
-        &panschema::linkml::SchemaDefinition,
-        &[panschema::instances::InstanceSet],
-    )> = sibling_graphs
+    let siblings: Vec<panschema::diagnostics::SiblingGraph> = sibling_graphs
         .iter()
-        .map(|(s, sets)| (s, sets.as_slice()))
+        .map(
+            |(entry, schema, sets)| panschema::diagnostics::SiblingGraph {
+                entry,
+                schema,
+                sets,
+            },
+        )
         .collect();
+    // Indexed once here, read for every referring file below.
+    let sibling_records = (!value_claims.is_empty())
+        .then(|| panschema::diagnostics::SiblingRecords::index(&siblings));
 
     let sibling_names = check_cfg.resolve_against.join("`, `");
     let mut total = panschema::diagnostics::SiblingResolution::default();
     let mut absences = panschema::diagnostics::AbsenceVerification::default();
     let mut versions = panschema::diagnostics::VersionVerification::default();
+    let mut claims = panschema::diagnostics::ValueClaimVerification::default();
     let mut uncovered = 0usize;
     // One streamed pass per referring file: each file's warnings flush
     // before the next file is even opened, and nothing is retained.
@@ -606,6 +618,20 @@ fn check_resolve_against(
             versions.mismatched.extend(checked.mismatched);
             versions.uncheckable.extend(checked.uncheckable);
         }
+        if let Some(sibling_records) = &sibling_records {
+            let checked =
+                panschema::diagnostics::value_claims(schema, &set, &value_claims, sibling_records);
+            for u in &checked.uncheckable {
+                eprintln!("warning: {}: {}", path.display(), u.message());
+            }
+            for f in &checked.failures {
+                eprintln!("warning: {}: {}", path.display(), f.message());
+            }
+            claims.claims += checked.claims;
+            claims.failed_claims += checked.failed_claims;
+            claims.failures.extend(checked.failures);
+            claims.uncheckable.extend(checked.uncheckable);
+        }
     }
 
     let resolved = total.checked - total.unresolved.len();
@@ -646,6 +672,16 @@ fn check_resolve_against(
             versions.uncheckable.len(),
         );
     }
+    if !value_claims.is_empty() {
+        family_summary(
+            "value claim(s)",
+            "claim(s)",
+            "hold against",
+            claims.claims,
+            claims.failed_claims,
+            claims.uncheckable.len(),
+        );
+    }
 
     let mut problems = Vec::new();
     if !total.unresolved.is_empty() {
@@ -655,30 +691,34 @@ fn check_resolve_against(
             total.checked
         ));
     }
-    if absences.contradicted_claims > 0 {
-        problems.push(format!(
-            "{} stated absence claim(s) do not hold",
-            absences.contradicted_claims
-        ));
-    }
-    if !absences.uncheckable.is_empty() {
-        problems.push(format!(
-            "{} stated absence claim(s) could not be checked",
-            absences.uncheckable.len()
-        ));
-    }
-    if !versions.mismatched.is_empty() {
-        problems.push(format!(
-            "{} version pin(s) disagree with the sibling they name",
-            versions.mismatched.len()
-        ));
-    }
-    if !versions.uncheckable.is_empty() {
-        problems.push(format!(
-            "{} version pin(s) could not be checked",
-            versions.uncheckable.len()
-        ));
-    }
+    // "N <what> <fail phrase>" and "U <what> could not be checked", each
+    // only when nonzero: the strict-promoted half of each family.
+    let mut family_problems = |what: &str, fail_phrase: &str, failed: usize, uncheckable: usize| {
+        if failed > 0 {
+            problems.push(format!("{failed} {what} {fail_phrase}"));
+        }
+        if uncheckable > 0 {
+            problems.push(format!("{uncheckable} {what} could not be checked"));
+        }
+    };
+    family_problems(
+        "stated absence claim(s)",
+        "do not hold",
+        absences.contradicted_claims,
+        absences.uncheckable.len(),
+    );
+    family_problems(
+        "version pin(s)",
+        "disagree with the sibling they name",
+        versions.mismatched.len(),
+        versions.uncheckable.len(),
+    );
+    family_problems(
+        "value claim(s)",
+        "do not hold",
+        claims.failed_claims,
+        claims.uncheckable.len(),
+    );
     if uncovered > 0 {
         problems.push(format!(
             "{uncovered} external reference(s) land in no covered namespace"

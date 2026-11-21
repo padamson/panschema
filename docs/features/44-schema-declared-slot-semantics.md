@@ -1,9 +1,9 @@
 # Feature 44: Schema-Declared Slot Semantics
 
-**Feature:** Read three slot-level meanings from the schema that declares
+**Feature:** Read four slot-level meanings from the schema that declares
 the slot — absence claims (`asserts_absence`), anchor-IRI expansion
-(`expand_against`), and version pins (`records_version_of`) — instead of
-from each consumer's manifest, and bind
+(`expand_against`), version pins (`records_version_of`), and value claims
+(`asserts_value`) — instead of from each consumer's manifest, and bind
 cross-graph checks to the dataset a record itself names.
 
 **User Story:** As the author of a contract schema whose slots carry
@@ -105,6 +105,38 @@ pin, a benchmark written against one release of its target reads green
 when checked against any later one, so nothing distinguishes a
 benchmark checked against the release it was written for from one
 checked against whatever happens to be installed.
+
+**Value claims.** A class-ranged slot annotated
+
+```yaml
+expected_values:
+  range: ExpectedValue
+  multivalued: true
+  inlined_as_list: true
+  annotations:
+    asserts_value:
+      value:
+        record_slot: record
+        slot_slot: slot
+        value_slot: value
+        among: expected_anchors
+```
+
+declares: each entry at this slot claims that the sibling record named
+at `record_slot` carries the value at `value_slot` at the slot named at
+`slot_slot` (a slot name of the sibling's schema, as instance data
+writes it). The value is written as a string and read the way the
+sibling slot's range reads it: an enum's permissible-value text, a
+number by numeric equality (`"0.9"` equals `0.9`; an integer exactly),
+a class reference as the IRI the sibling mints (a bare id) or the IRI it
+expands to, anything else by string equality; at a multivalued slot the claim holds when the
+value is among the record's values. `among`, when stated, names a slot
+of the containing record: the claimed record must be among its values,
+or those of a slot specializing it through `is_a`. A failing claim
+warns per entry and fails under `--strict`; a claim that cannot be
+evaluated is reported uncheckable, never as holding. A slot the record's
+class carries but the record leaves unset is a failing claim: absence
+is not a match.
 
 **Dataset binding.** Where the referring record itself names which
 target dataset its claims are about, checks bind to that dataset rather
@@ -222,9 +254,10 @@ RDF must carry them (see Open Questions for the vocabulary).
 
 **Acceptance criteria:**
 
-- [ ] The Turtle emitted for a schema carrying `asserts_absence` or
-      `expand_against` states them on the slot's IRI, so a consumer
-      reading only the published graph sees the declaration.
+- [ ] The Turtle emitted for a schema carrying `asserts_absence`,
+      `expand_against`, `records_version_of`, or `asserts_value` states
+      them on the slot's IRI, so a consumer reading only the published
+      graph sees the declaration.
 - [ ] Round trip: the OWL reader reads the projection back into the
       same annotations.
 
@@ -269,6 +302,78 @@ RDF must carry them (see Open Questions for the vocabulary).
   name that matches two siblings through aliases is uncheckable rather
   than first-match.
 
+### Slice 7: value claims are checked against the sibling — Complete
+
+**Acceptance criteria:**
+
+- [x] An entry whose record, slot, and value agree with the sibling
+      record counts as a holding claim, and the check's summary says how
+      many claims hold — for an enum value, a number written as a
+      string, a class reference, and a value among several at a
+      multivalued slot.
+- [x] An entry fails, warning by its place in the data
+      (`q1.expected_values[0]`, under its nearest identified record), when the sibling record
+      carries a different value, carries none at the slot, or its class
+      does not carry the slot (naming the class); the manifest-wide
+      check fails under `--strict`.
+- [x] An entry whose record is not among the containing record's
+      `among` values fails, naming the containing record and the slot;
+      a value at a slot specializing `among` through `is_a` counts as
+      among it.
+- [x] A claim that cannot be evaluated is reported uncheckable with the
+      reason and counts against `--strict`: no single record, slot, or
+      value; a value written as a number or a boolean; a record no
+      sibling mints; a value the slot's range cannot read (an enum's
+      non-member, a non-number at a numeric slot); a value whose prefix
+      the referring schema does not declare; a containing record whose
+      class carries neither `among` nor a slot specializing it. A claim
+      that fails outright fails even when another part of it cannot be
+      evaluated.
+- [x] Declaration defects (a value that is not a mapping, a missing or
+      non-string field, an unknown field, an annotated slot no class
+      carries or whose range is not a class, a `record_slot`,
+      `slot_slot`, or `value_slot` its entry class does not carry, an
+      `among` the carrying class does not carry) are load warnings that `--strict` refuses, like
+      the other families, and a schema declaring claims with no
+      `resolve_against` gets the note that nothing verifies them. A
+      declaration is judged by the classes that can have records: an
+      abstract or mixin class is judged through the classes under it,
+      and a class carrying only a slot that specializes `among` carries
+      it.
+- [x] The shipped skill documents the annotation's value shape and the
+      verdicts a claim can receive (a test holds the skill to it).
+
+**Notes:**
+- Same `ScopedBindings` walk, families table, and `resolve_against`
+  enablement as the other families; the sibling graphs the absence pass
+  already loads are the only input.
+- A record several sibling datasets mint (a teaching preview sharing
+  records with a worked example) is checked against each; the claim
+  fails if any disagrees. Binding to the one dataset a benchmark names
+  is Slice 3's.
+- A claimed value at a class-ranged slot reads as an anchor does: a bare
+  id names the record the sibling mints for it, a value with a `:` is
+  expanded against the referring schema. At a `uri`, `uriorcurie`, or
+  `curie` slot a value with a `:` compares as the IRI it expands to, so
+  a CURIE and its absolute form agree. Each side expands against its own
+  schema. A scheme neither declares as a prefix (`mailto:`) compares as
+  written, and a prefix only the sibling declares leaves the claim
+  uncheckable, since the referring schema cannot say what it names.
+- A reference a sibling record states, and a bare id claimed of it, are
+  read in the dataset that holds the record: key-identified records
+  scope under their dataset, so two datasets can each hold a record of
+  one id. An id that dataset does not hold names the one record of that
+  id among the sibling's datasets, and otherwise expands as written.
+- An integer slot compares the claim as an integer, not through a
+  float, so values past 2^53 are not confused.
+- A `decimal` slot compares through a float, and a `date`, `datetime`,
+  or `time` slot compares the text as written, because the instance
+  model holds a decimal as a float and a temporal value as a string. Two
+  spellings of one instant (`Z` and `+00:00`) therefore differ, and a
+  claim is written the way the sibling's data writes the value.
+- A slot range with `any_of` alternatives is uncheckable: which member
+  reads the string is not decidable from the claim.
+
 ---
 
 ## Open Questions
@@ -298,6 +403,10 @@ RDF must carry them (see Open Questions for the vocabulary).
 
 ## Things to watch
 
+- A value claim's value reaches RDF as a plain string literal whatever
+  the target slot's range, since the claiming schema types the field
+  `string` and only the check reads it by the sibling's range. A reader
+  of the emitted graph needs the target schema to type it.
 - A Turtle-authored contract schema cannot express these annotations
   until Slice 5's projection round-trips them through the OWL reader —
   and the manifest fallback is gone — so absence checking is
