@@ -796,7 +796,7 @@ pub(crate) fn discover_file(start_dir: &Path, filename: &str) -> Option<PathBuf>
 /// `paths` in order, without a second spelling of a file already in it: a
 /// manifest-relative path and a dependency's absolute one can name the same
 /// file, and a dataset shipped twice is minted twice.
-fn once_per_file(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+pub fn once_per_file(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
     let mut seen = std::collections::BTreeSet::new();
     paths
         .into_iter()

@@ -29,7 +29,7 @@ The fixture script then decides pass or fail by matching message text, so reword
 **User Value:** An author who runs the per-file form on data that states claims learns that they went unchecked and which form checks them.
 
 **Acceptance Criteria:**
-- [x] `verify --schema S --data F` on data that states claims of a family the schema declares (`asserts_value`, `asserts_absence`, `records_version_of`) prints one note per family and file, giving how many claims the file states and that bare `verify` with `resolve_against` checks them.
+- [x] `verify --schema S --data F` on data that states claims of a family the schema declares (`asserts_value`, `asserts_absence`, `records_version_of`) prints one note per family and file giving how many claims the file states, then one hint naming the manifest form that checks them (`verify --entry`), with the files to pass it.
 - [x] The count is every claim bare `verify` reads in the file, the ones it evaluates and the ones it reports uncheckable together: value claims count entries, absence claims and version pins count records.
 - [x] Data that declares a claim slot but states no claim, and a schema that declares none, print no such note.
 - [x] The note does not change the outcome: data that conforms still prints "conforms" and exits 0.
@@ -42,18 +42,21 @@ The fixture script then decides pass or fail by matching message text, so reword
 
 ### Slice 2: Check named files as one entry's data
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A fixture is checked against the manifest's sibling graphs with one command run from the repo, with no copy of the manifest.
 
 **Acceptance Criteria:**
-- [ ] `verify --entry <name> --data F [--data G ...]` checks only the manifest entry `<name>`, reading the named files in place of the instances it declares, with every `[check.<name>]` policy and every `resolve_against` sibling loaded as the manifest declares them.
-- [ ] `--strict` applies, and the exit code follows the contract: 0 when nothing is found, 1 when a finding fails `--strict` or a file does not conform, 2 when the command cannot run.
-- [ ] An `--entry` naming no `[schemas]` entry, `--entry` without `--data`, and `--entry` with `--schema` are refused with exit 2.
-- [ ] Data paths are read relative to the working directory, as `--data` is read in the per-file form.
+- [x] `verify --entry <name> --data F [--data G ...]` checks only the manifest entry `<name>`, reading the named files in place of the instances it declares, with every `[check.<name>]` policy and every `resolve_against` sibling loaded as the manifest declares them.
+- [x] Findings are reported as bare `verify` reports them: every finding, a file that does not conform included, warns, and with `--strict` any finding exits 1. The command exits 2 when it cannot run.
+- [x] The result holds the named files' findings alone: the entry's schema diagnostics print but do not fail the run, and a file named twice is checked once.
+- [x] When the entry names no `resolve_against` sibling, each claim a named file states is reported as not checked, which `--strict` refuses. A file stating no claim is unaffected.
+- [x] An `--entry` naming no `[schemas]` entry, `--entry` without `--data`, and `--entry` with `--schema` are refused with exit 2.
+- [x] Data paths are read relative to the working directory, as `--data` is read in the per-file form.
 
 **Notes:**
 - Other entries are not checked, so a fixture's result holds only its own findings.
+- Every `[schemas]` entry is still resolved, as in each manifest-driven command, and each run loads the siblings again. A suite that runs one process per fixture pays that per fixture; Slice 3's per-file findings let it name every fixture in one run.
 
 ---
 
@@ -98,7 +101,7 @@ The fixture script then decides pass or fail by matching message text, so reword
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Completed |
-| Slice 2 | Must Have | None | Not Started |
+| Slice 2 | Must Have | None | Completed |
 | Slice 3 | Must Have | None | Not Started |
 | Slice 4 | Must Have | Slice 3 | Not Started |
 

@@ -8,7 +8,7 @@ bare no-subcommand form.
 | Code | Meaning |
 |---|---|
 | 0 | The command did what it was asked, and any check it ran found nothing |
-| 1 | A check ran to the end and found something: `generate --check` or `fetch --check` drift, `verify --schema`/`--data` violations, or what `--strict` refuses on `generate` or bare `verify` |
+| 1 | A check ran to the end and found something: `generate --check` or `fetch --check` drift, `verify --schema`/`--data` violations, or what `--strict` refuses on `generate`, bare `verify`, or `verify --entry` |
 | 2 | The command could not run: a bad flag, a file that does not parse (the manifest, the lockfile, a schema, or a data file), a dependency that does not resolve, a missing file, or a refusal such as `release` on a dirty tree |
 
 The split is between a finding and an error, not between a transient
@@ -19,7 +19,7 @@ Rust's default, and is a bug in panschema.
 | Subcommand | What it does |
 |---|---|
 | `generate` | Render a schema to an output format. With no `--schema`, discovers `panschema.toml` and generates every manifested schema |
-| `verify` | With `--schema`/`--data`: check a LinkML **instance-data** file against a schema, listing every violation and exiting 1 if there are any. With **no flags**: read `panschema.toml` and check everything it declares — conformance, cross-graph resolution, stated absences — writing nothing; findings warn, `--strict` fails on them. *Not* schema-vs-metaschema verification |
+| `verify` | With `--schema`/`--data`: check a LinkML **instance-data** file against a schema, listing every violation and exiting 1 if there are any. With **no flags**: read `panschema.toml` and check everything it declares — conformance, cross-graph resolution, stated absences — writing nothing; findings warn, `--strict` fails on them. With `--entry <name>`/`--data`: the same checks for that one manifest entry, reading the named files (relative to the working directory) in place of its datasets, against its `resolve_against` siblings as declared — so a fixture that must fail sits beside one that must pass, each run holding only its own findings: the schema's own diagnostics print without failing it (bare `verify --strict` refuses those), and with no `resolve_against` sibling the claims a file states are findings, not a pass. Pass `--strict`, or findings only warn. *Not* schema-vs-metaschema verification |
 | `migrate` | Write the schema's Postgres DDL as a versioned migration file. Writes files only — it never connects to a database |
 | `publish` | Build versioned HTML docs per git ref, per `[publishing]` in `panschema-publish.toml` |
 | `serve` | Hot-reload dev server for HTML output |
@@ -84,6 +84,9 @@ Rust's default, and is a bug in panschema.
 
     # is this instance data conformant?
     panschema verify --schema schema/my.yaml --data data/full.yaml
+
+    # does this fixture's claim fail against the manifest's sibling graphs?
+    panschema verify --entry bench --data tests/fixtures/wrong-value.yaml --strict
 
     # first migration for a database that has never seen this schema
     panschema migrate --schema schema/my.yaml --migrations db/migrations/

@@ -3,7 +3,7 @@ name: panschema-usage
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.5.22"
+  version: "0.5.23"
 ---
 
 # panschema
@@ -32,7 +32,9 @@ model by reading a projection back in.
 - **Generate a repo's declared artifacts** — `panschema generate` with no
   `--schema`, driven by `panschema.toml`:
   [references/manifest.md](references/manifest.md).
-- **Check instance data** — `panschema verify --schema <s> --data <d>`.
+- **Check instance data** — `panschema verify --schema <s> --data <d>`;
+  against a manifest's sibling graphs, `panschema verify --entry <name>
+  --data <d> --strict` (without `--strict`, findings only warn).
 - **Full CLI surface and recipes** — [references/cli.md](references/cli.md).
 
 ## Four things that reliably go wrong

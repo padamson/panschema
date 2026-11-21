@@ -3815,6 +3815,13 @@ resolve_against = ["catalog"]
         );
     }
     assert_eq!(
+        stderr
+            .matches("`panschema verify --entry <name> --data bench-data.yaml --strict`")
+            .count(),
+        1,
+        "one hint names the form that checks the file's claims; got:\n{stderr}"
+    );
+    assert_eq!(
         (
             unread.status.code(),
             String::from_utf8_lossy(&unread.stdout).contains("bench-data.yaml conforms")
@@ -3831,9 +3838,284 @@ resolve_against = ["catalog"]
         "data stating no claim conforms; got:\n{stderr}"
     );
     assert!(
-        !stderr.contains("note: bench-empty.yaml:"),
-        "data stating no claim gets no note; got:\n{stderr}"
+        !stderr.contains("note: bench-empty.yaml:") && !stderr.contains("--entry"),
+        "data stating no claim gets no note and no hint; got:\n{stderr}"
     );
+
+    // `--entry` checks named files as one entry's data against the
+    // manifest's siblings. The entry's generated and check-only data and
+    // the catalog all carry a finding here, so a pass means none was read
+    // as checked data.
+    {
+        let fixtures = consumer.join("fixtures");
+        fs::create_dir(&fixtures).unwrap();
+        let renamed = |data: String, n: char| {
+            data.replace("id: b1", &format!("id: b{n}"))
+                .replace("id: q1", &format!("id: q{n}"))
+        };
+        fs::write(fixtures.join("holds.yaml"), bench_data("gold")).unwrap();
+        fs::write(
+            fixtures.join("holds-too.yaml"),
+            renamed(bench_data("gold"), '2'),
+        )
+        .unwrap();
+        fs::write(fixtures.join("wrong.yaml"), bench_data("silver")).unwrap();
+        fs::write(consumer.join("bench-data.yaml"), bench_data("silver")).unwrap();
+        fs::write(
+            consumer.join("bench-extra.yaml"),
+            renamed(bench_data("silver"), '7'),
+        )
+        .unwrap();
+        let manifest = fs::read_to_string(consumer.join("panschema.toml")).unwrap();
+        assert!(manifest.ends_with("[check.bench]\nresolve_against = [\"catalog\"]\n"));
+        fs::write(
+            consumer.join("panschema.toml"),
+            format!("{manifest}instances = [\"bench-extra.yaml\"]\n"),
+        )
+        .unwrap();
+        let catalog_data = fs::read_to_string(consumer.join("catalog-data.yaml")).unwrap();
+        fs::write(
+            consumer.join("catalog-data.yaml"),
+            format!("{catalog_data}  - {{id: odd, tier: bronze}}\n"),
+        )
+        .unwrap();
+        let verify = |dir: &Path, args: &[&str]| run_in(dir, &[&["verify"][..], args].concat());
+
+        let bare = verify(consumer, &["--strict"]);
+        let stderr = String::from_utf8_lossy(&bare.stderr);
+        assert_eq!(
+            (
+                bare.status.code(),
+                stderr.contains("bench-data.yaml: value claim"),
+                stderr.contains("bench-extra.yaml: value claim"),
+                stderr.contains("catalog-data.yaml") && stderr.contains("bronze"),
+            ),
+            (FOUND, true, true, true),
+            "bare verify reads the entry's generated and check-only data and the catalog, each \
+             of which fails; got:\n{stderr}"
+        );
+
+        // Run from below the manifest's directory, so the named files only
+        // resolve if they are read relative to the working directory.
+        let holds = verify(
+            &fixtures,
+            &[
+                "--entry",
+                "bench",
+                "--data",
+                "holds.yaml",
+                "--data",
+                "./holds.yaml",
+                "--data",
+                "holds-too.yaml",
+                "--strict",
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&holds.stderr);
+        assert_eq!(
+            holds.status.code(),
+            Some(0),
+            "the named files, read from the working directory, replace the entry's data and no \
+             other entry is checked; got:\n{stderr}"
+        );
+        for summary in [
+            "4 of 4 stated absence claim(s) hold against `catalog`",
+            "2 of 2 version pin(s) agree with `catalog`",
+            "2 of 2 value claim(s) hold against `catalog`",
+        ] {
+            assert!(
+                stderr.contains(summary),
+                "both named files' claims are checked against the declared sibling, a file \
+                 named twice once, so stderr says `{summary}`; got:\n{stderr}"
+            );
+        }
+
+        let wrong = verify(
+            consumer,
+            &["--entry", "bench", "--data", "fixtures/wrong.yaml"],
+        );
+        let stderr = String::from_utf8_lossy(&wrong.stderr);
+        assert_eq!(
+            (
+                wrong.status.code(),
+                stderr.contains("fixtures/wrong.yaml: value claim `q1.expected_values[0]`")
+            ),
+            (Some(0), true),
+            "without --strict a failing claim in a named file warns, naming the file; \
+             got:\n{stderr}"
+        );
+        let strict = verify(
+            consumer,
+            &[
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/wrong.yaml",
+                "--strict",
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&strict.stderr);
+        assert_eq!(
+            (
+                strict.status.code(),
+                stderr.contains("1 value claim(s) do not hold")
+            ),
+            (FOUND, true),
+            "a failing claim in a named file fails --strict; got:\n{stderr}"
+        );
+
+        fs::write(fixtures.join("malformed.yaml"), "id: b3\nbogus: 1\n").unwrap();
+        let lenient = verify(
+            consumer,
+            &["--entry", "bench", "--data", "fixtures/malformed.yaml"],
+        );
+        let strict = verify(
+            consumer,
+            &[
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/malformed.yaml",
+                "--strict",
+            ],
+        );
+        assert_eq!(
+            (
+                lenient.status.code(),
+                String::from_utf8_lossy(&lenient.stderr)
+                    .contains("warning: fixtures/malformed.yaml:"),
+                strict.status.code()
+            ),
+            (Some(0), true, FOUND),
+            "a named file that does not conform warns, and fails --strict, as in bare verify; \
+             got:\n{}",
+            String::from_utf8_lossy(&lenient.stderr)
+        );
+
+        // The schema's own diagnostics print but are bare verify's to
+        // refuse: a named file's result is its own findings.
+        let bench_schema_path = bench_pkg.join("bench.yaml");
+        let bench_schema = fs::read_to_string(&bench_schema_path).unwrap();
+        fs::write(
+            &bench_schema_path,
+            format!("{bench_schema}  stray: {{range: Nowhere}}\n"),
+        )
+        .unwrap();
+        let schema_defect = verify(
+            consumer,
+            &[
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/holds.yaml",
+                "--strict",
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&schema_defect.stderr);
+        assert_eq!(
+            (schema_defect.status.code(), stderr.contains("`Nowhere`")),
+            (Some(0), true),
+            "a schema diagnostic warns without failing a named file that holds; got:\n{stderr}"
+        );
+        fs::write(&bench_schema_path, bench_schema).unwrap();
+
+        // With no sibling to read, the claims a named file states are
+        // findings, never a pass.
+        fs::write(
+            consumer.join("panschema.toml"),
+            manifest
+                .strip_suffix("[check.bench]\nresolve_against = [\"catalog\"]\n")
+                .unwrap(),
+        )
+        .unwrap();
+        let unread = verify(
+            consumer,
+            &["--entry", "bench", "--data", "fixtures/wrong.yaml"],
+        );
+        let stderr = String::from_utf8_lossy(&unread.stderr);
+        assert_eq!(
+            (
+                unread.status.code(),
+                stderr.contains(
+                    "warning: fixtures/wrong.yaml: 1 `asserts_value` claim(s) not checked: \
+                     [check.bench] names no resolve_against siblings"
+                )
+            ),
+            (Some(0), true),
+            "claims no sibling can check warn per family; got:\n{stderr}"
+        );
+        let strict = verify(
+            consumer,
+            &[
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/wrong.yaml",
+                "--strict",
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&strict.stderr);
+        assert_eq!(
+            (
+                strict.status.code(),
+                stderr.contains("4 claim(s) not checked for want of sibling graphs")
+            ),
+            (FOUND, true),
+            "unread claims fail --strict; got:\n{stderr}"
+        );
+        let states_nothing = verify(
+            consumer,
+            &["--entry", "bench", "--data", "bench-empty.yaml", "--strict"],
+        );
+        assert_eq!(
+            states_nothing.status.code(),
+            Some(0),
+            "a named file stating no claim has nothing unread; got:\n{}",
+            String::from_utf8_lossy(&states_nothing.stderr)
+        );
+        fs::write(
+            consumer.join("panschema.toml"),
+            format!("{manifest}instances = [\"bench-extra.yaml\"]\n"),
+        )
+        .unwrap();
+
+        for (args, refused, named) in [
+            (
+                &["--entry", "nope", "--data", "fixtures/holds.yaml"][..],
+                "an entry naming no [schemas] entry",
+                "`nope`",
+            ),
+            (
+                &["--entry", "bench"][..],
+                "--entry without --data",
+                "required arguments were not provided",
+            ),
+            (
+                &[
+                    "--entry",
+                    "bench",
+                    "--schema",
+                    "bench-pkg/bench.yaml",
+                    "--data",
+                    "fixtures/holds.yaml",
+                ][..],
+                "--entry with --schema",
+                "cannot be used with",
+            ),
+        ] {
+            let out = verify(consumer, args);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(
+                (out.status.code(), stderr.contains(named)),
+                (COULD_NOT_RUN, true),
+                "{refused} is refused, naming {named}; got:\n{stderr}"
+            );
+        }
+
+        fs::write(consumer.join("panschema.toml"), manifest).unwrap();
+        fs::write(consumer.join("catalog-data.yaml"), catalog_data).unwrap();
+        fs::write(consumer.join("bench-data.yaml"), bench_data("gold")).unwrap();
+    }
 
     // A claimed value the sibling record does not carry warns naming the
     // entry and what the sibling holds, and fails under --strict.

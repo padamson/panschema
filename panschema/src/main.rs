@@ -249,16 +249,25 @@ enum Commands {
     /// on any violation. With no flags, reads `panschema.toml` instead and
     /// checks everything it declares — instance conformance for every
     /// dataset, cross-graph resolution, stated absences — writing nothing;
-    /// findings warn, and `--strict` fails on them.
+    /// findings warn, and `--strict` fails on them. `--entry`/`--data` does
+    /// the same for one manifest entry, reading the given file(s) in place
+    /// of its datasets; its siblings load as the manifest declares them,
+    /// and the result holds those files' findings alone.
     #[command(after_help = EXIT_STATUS)]
+    #[command(group = clap::ArgGroup::new("checked_as").args(["schema", "entry"]))]
     Verify {
         /// Schema file (.yaml, .yml, .ttl) the data must conform to.
         #[arg(short, long, requires = "data")]
         schema: Option<PathBuf>,
-        /// LinkML instance-data file (a `tree_root` container A-box).
-        /// Repeatable: several datasets are each verified, and ids that mint
-        /// to the same IRI across them are reported.
-        #[arg(short, long, requires = "schema")]
+        /// Manifest entry the data is checked as, with its `[check.<name>]`
+        /// policy and `resolve_against` siblings.
+        #[arg(long, requires = "data")]
+        entry: Option<String>,
+        /// LinkML instance-data file (a `tree_root` container A-box), read
+        /// relative to the working directory. Repeatable: several datasets
+        /// are each verified, and ids that mint to the same IRI across them
+        /// are reported.
+        #[arg(short, long, requires = "checked_as")]
         data: Vec<PathBuf>,
         /// Manifest mode only: treat findings as errors.
         #[arg(long, conflicts_with = "schema")]
@@ -383,6 +392,15 @@ fn resolved_deps(
     Ok(deps)
 }
 
+/// A manifest with every `[schemas]` entry resolved: where a per-entry
+/// check finds the entry's policy, its datasets, and its siblings.
+#[derive(Clone, Copy)]
+struct ResolvedManifest<'a> {
+    manifest: &'a panschema::manifest::Manifest,
+    dir: &'a Path,
+    resolved: &'a std::collections::BTreeMap<String, panschema::source::Resolved>,
+}
+
 /// The main-file path of every resolved dependency — the map the loader
 /// resolves cross-package `imports:` against.
 fn dep_paths(
@@ -421,12 +439,15 @@ fn dep_paths(
 fn check_resolve_against(
     name: &str,
     declared: &[PathBuf],
-    manifest: &panschema::manifest::Manifest,
-    manifest_dir: &Path,
-    resolved: &std::collections::BTreeMap<String, panschema::source::Resolved>,
+    resolved_manifest: ResolvedManifest,
     schema: &panschema::linkml::SchemaDefinition,
     registry: &FormatRegistry,
 ) -> anyhow::Result<Vec<String>> {
+    let ResolvedManifest {
+        manifest,
+        dir: manifest_dir,
+        resolved,
+    } = resolved_manifest;
     let deps = &dep_paths(resolved);
     // The schema itself declares which slots carry absence claims
     // (`asserts_absence` annotations); the manifest contributes only
@@ -1377,11 +1398,15 @@ fn generate_from_manifest(
             panschema::load::load_schema_with_report(schema_path, &registry, &deps)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         {
+            let declared = manifest.declared_instances(name, &manifest_dir, &resolved)?;
             let entry = verify_entry(
                 name,
-                &manifest,
-                &manifest_dir,
-                &resolved,
+                &declared,
+                ResolvedManifest {
+                    manifest: &manifest,
+                    dir: &manifest_dir,
+                    resolved: &resolved,
+                },
                 &schema,
                 &registry,
                 verbose,
@@ -2257,32 +2282,25 @@ struct EntryFindings {
 /// Check one manifest entry, printing each finding as it goes. The
 /// `[check.<name>]` pass runs even without a table: it owns the early
 /// return, and it is where a schema that declares absence claims nothing
-/// verifies gets its note.
+/// verifies gets its note. `data` is what is checked as the entry's
+/// datasets: the ones it declares, or files named in their place. Its
+/// siblings load as the manifest declares them either way.
 fn verify_entry(
     name: &str,
-    manifest: &panschema::manifest::Manifest,
-    manifest_dir: &Path,
-    resolved: &std::collections::BTreeMap<String, panschema::source::Resolved>,
+    data: &[PathBuf],
+    resolved_manifest: ResolvedManifest,
     schema: &panschema::linkml::SchemaDefinition,
     registry: &FormatRegistry,
     verbose: bool,
 ) -> anyhow::Result<EntryFindings> {
     use anyhow::Context as _;
-    let declared = manifest.declared_instances(name, manifest_dir, resolved)?;
+    let resolved = resolved_manifest.resolved;
     panschema::source::DeclaredDatasets::from_resolved(resolved)
-        .check_listed(name, resolved, &declared)?;
-    let (violations, datasets) = verify_datasets(schema, &declared, true, "warning: ", verbose)
+        .check_listed(name, resolved, data)?;
+    let (violations, datasets) = verify_datasets(schema, data, true, "warning: ", verbose)
         .with_context(|| format!("schema `{name}`, check"))?;
-    let problems = check_resolve_against(
-        name,
-        &declared,
-        manifest,
-        manifest_dir,
-        resolved,
-        schema,
-        registry,
-    )
-    .with_context(|| format!("schema `{name}`, check"))?;
+    let problems = check_resolve_against(name, data, resolved_manifest, schema, registry)
+        .with_context(|| format!("schema `{name}`, check"))?;
     Ok(EntryFindings {
         schema: panschema::diagnostics::strict_blocking(schema),
         violations,
@@ -2296,9 +2314,26 @@ fn verify_entry(
 /// `generate --strict` refuses), every declared dataset's conformance
 /// with the cross-dataset overlap notes, and the `[check.<name>]`
 /// policy. Findings warn as they stream; `--strict` fails once at the
-/// end, after every entry has reported.
-fn verify_manifest(strict: bool, verbose: bool) -> anyhow::Result<()> {
+/// end, after every entry has reported. With `only`, the one entry it
+/// names is checked, reading the given files in place of its datasets,
+/// and the run reports that data's findings alone: the schema's own
+/// diagnostics still print, but only the bare form counts them.
+fn verify_manifest(
+    only: Option<(&str, &[PathBuf])>,
+    strict: bool,
+    verbose: bool,
+) -> anyhow::Result<()> {
     let (manifest, manifest_dir) = load_manifest()?;
+    let named = match only {
+        Some((entry, _)) if !manifest.schemas.contains_key(entry) => anyhow::bail!(
+            "--entry names `{entry}`, which is not a [schemas] entry in this manifest"
+        ),
+        Some((entry, files)) => Some((
+            entry,
+            panschema::manifest::once_per_file(files.iter().cloned()),
+        )),
+        None => None,
+    };
     if manifest.schemas.is_empty() {
         eprintln!("Manifest has no `[schemas]` entries; nothing to check.");
         return Ok(());
@@ -2314,27 +2349,47 @@ fn verify_manifest(strict: bool, verbose: bool) -> anyhow::Result<()> {
     let resolved = resolved_deps(&manifest, &manifest_dir)?;
     let deps = dep_paths(&resolved);
     let registry = FormatRegistry::with_defaults();
+    let resolved_manifest = ResolvedManifest {
+        manifest: &manifest,
+        dir: &manifest_dir,
+        resolved: &resolved,
+    };
     let mut findings = 0usize;
     let mut problems: Vec<String> = Vec::new();
-    for name in manifest.schemas.keys() {
+    let entries: Vec<&str> = match &named {
+        Some((entry, _)) => vec![entry],
+        None => manifest.schemas.keys().map(String::as_str).collect(),
+    };
+    for name in entries {
         let schema = panschema::load::load_schema_with_deps(&deps[name], &registry, &deps)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let entry = verify_entry(
-            name,
-            &manifest,
-            &manifest_dir,
-            &resolved,
-            &schema,
-            &registry,
-            verbose,
-        )?;
-        findings += entry.schema.total() + entry.violations;
+        let data = match &named {
+            Some((_, files)) => files.clone(),
+            None => manifest.declared_instances(name, &manifest_dir, &resolved)?,
+        };
+        let entry = verify_entry(name, &data, resolved_manifest, &schema, &registry, verbose)?;
+        findings += entry.violations;
+        if named.is_some() {
+            problems.extend(claims_without_siblings(
+                name,
+                &manifest,
+                &schema,
+                &entry.datasets,
+            ));
+        } else {
+            findings += entry.schema.total();
+        }
         problems.extend(entry.problems);
     }
     if strict && (findings > 0 || !problems.is_empty()) {
         let mut parts = problems;
         if findings > 0 {
-            parts.insert(0, format!("{findings} schema or conformance finding(s)"));
+            let found = if named.is_some() {
+                "conformance"
+            } else {
+                "schema or conformance"
+            };
+            parts.insert(0, format!("{findings} {found} finding(s)"));
         }
         anyhow::bail!(Findings(format!(
             "{}; failing because --strict is set",
@@ -2409,16 +2464,57 @@ fn print_unchecked_claims(
     schema: &panschema::linkml::SchemaDefinition,
     sets: &[(String, panschema::instances::InstanceSet)],
 ) {
+    let mut stating: Vec<&str> = Vec::new();
     for (label, set) in sets {
-        for unchecked in panschema::diagnostics::unchecked_claims(schema, set) {
+        let unchecked = panschema::diagnostics::unchecked_claims(schema, set);
+        for family in &unchecked {
             eprintln!(
-                "note: {label}: {} `{}` claim(s) not checked; checking them needs the sibling \
-                 graphs they name, which bare `panschema verify` loads from a manifest's \
-                 `resolve_against`",
-                unchecked.count, unchecked.annotation
+                "note: {label}: {} `{}` claim(s) not checked",
+                family.count, family.annotation
             );
         }
+        if !unchecked.is_empty() {
+            stating.push(label);
+        }
     }
+    if !stating.is_empty() {
+        eprintln!(
+            "note: checking them needs the sibling graphs they name, which `panschema verify \
+             --entry <name> --data {} --strict` loads from a manifest's `resolve_against`",
+            stating.join(" --data ")
+        );
+    }
+}
+
+/// Under `--entry`, the claims the named files state that nothing checks
+/// because the entry names no `resolve_against` siblings. Each family
+/// warns per file, and the returned summary is what `--strict` refuses, so
+/// a file's claims never pass unread.
+fn claims_without_siblings(
+    name: &str,
+    manifest: &panschema::manifest::Manifest,
+    schema: &panschema::linkml::SchemaDefinition,
+    datasets: &[(String, panschema::instances::InstanceSet)],
+) -> Option<String> {
+    let has_siblings = manifest
+        .check
+        .get(name)
+        .is_some_and(|check| !check.resolve_against.is_empty());
+    if has_siblings {
+        return None;
+    }
+    let mut unread = 0usize;
+    for (label, set) in datasets {
+        for family in panschema::diagnostics::unchecked_claims(schema, set) {
+            eprintln!(
+                "warning: {label}: {} `{}` claim(s) not checked: [check.{name}] names no \
+                 resolve_against siblings",
+                family.count, family.annotation
+            );
+            unread += family.count;
+        }
+    }
+    (unread > 0).then(|| format!("{unread} claim(s) not checked for want of sibling graphs"))
 }
 
 /// Verify LinkML instance-data files against their schema, printing every
@@ -2822,12 +2918,17 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         ),
         Commands::Verify {
             schema,
+            entry,
             data,
             strict,
             verbose,
         } => match schema {
             Some(schema) => verify_data(&schema, &data, verbose)?,
-            None => verify_manifest(strict, verbose)?,
+            None => verify_manifest(
+                entry.as_deref().map(|entry| (entry, data.as_slice())),
+                strict,
+                verbose,
+            )?,
         },
         Commands::Migrate { schema, migrations } => match (schema, migrations) {
             (Some(schema_path), Some(dir)) => {

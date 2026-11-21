@@ -117,6 +117,10 @@ never requires declaring an output, and the policy survives deleting a
 generate block. **Bare `panschema verify`** (no flags) reads the manifest
 and runs everything here plus instance conformance for every declared
 dataset, writing nothing — findings warn, `--strict` fails on them.
+`verify --entry <name> --data <file>` runs the same checks for one entry
+with the named files in place of its datasets, so a fixture is checked
+against the siblings without a copy of the manifest. Pass `--strict` there
+too: without it a failing claim warns and exits 0.
 `generate --strict` also refuses to ship what these checks reject for the
 entries it generates, and bare `verify --strict` additionally promotes
 the schema-level diagnostics `generate --strict` refuses (untyped slots,
