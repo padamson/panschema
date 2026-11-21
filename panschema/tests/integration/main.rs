@@ -3792,6 +3792,49 @@ resolve_against = ["catalog"]
         String::from_utf8_lossy(&holds.stderr)
     );
 
+    let per_file = |data: &str| {
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(["verify", "--schema", "bench-pkg/bench.yaml", "--data", data])
+            .current_dir(consumer)
+            .output()
+            .expect("run panschema")
+    };
+    let unread = per_file("bench-data.yaml");
+    let stderr = String::from_utf8_lossy(&unread.stderr);
+    for (count, annotation) in [
+        (2, "asserts_absence"),
+        (1, "records_version_of"),
+        (1, "asserts_value"),
+    ] {
+        assert!(
+            stderr.contains(&format!(
+                "note: bench-data.yaml: {count} `{annotation}` claim(s) not checked"
+            )),
+            "per-file verify counts the {annotation} claims it leaves unchecked as bare verify \
+             counts them; got:\n{stderr}"
+        );
+    }
+    assert_eq!(
+        (
+            unread.status.code(),
+            String::from_utf8_lossy(&unread.stdout).contains("bench-data.yaml conforms")
+        ),
+        (Some(0), true),
+        "unchecked claims are a note, not a finding; got:\n{stderr}"
+    );
+    fs::write(consumer.join("bench-empty.yaml"), "id: b2\n").unwrap();
+    let stated_nothing = per_file("bench-empty.yaml");
+    let stderr = String::from_utf8_lossy(&stated_nothing.stderr);
+    assert_eq!(
+        stated_nothing.status.code(),
+        Some(0),
+        "data stating no claim conforms; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("note: bench-empty.yaml:"),
+        "data stating no claim gets no note; got:\n{stderr}"
+    );
+
     // A claimed value the sibling record does not carry warns naming the
     // entry and what the sibling holds, and fails under --strict.
     fs::write(consumer.join("bench-data.yaml"), bench_data("silver")).unwrap();

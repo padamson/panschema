@@ -1226,6 +1226,14 @@ pub struct AbsenceVerification {
     pub unverified: Vec<UnverifiedAbsence>,
 }
 
+impl AbsenceVerification {
+    /// Every claim the check read: the ones it evaluated and the ones it
+    /// could not.
+    pub fn read(&self) -> usize {
+        self.claims + self.uncheckable.len()
+    }
+}
+
 /// How an `asserts_absence` declaration narrows its claims.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbsenceVia {
@@ -1668,9 +1676,19 @@ pub struct SlotSemanticsFamily {
     pub noun: &'static str,
     pub annotation: &'static str,
     pub issues: fn(&SchemaDefinition) -> Vec<String>,
-    /// Slots declaring the family — `None` for a family the manifest's
-    /// `resolve_against` does not gate.
-    pub declared: Option<fn(&SchemaDefinition) -> usize>,
+    /// How the family's claims are checked against sibling graphs —
+    /// `None` for a family the manifest's `resolve_against` does not gate.
+    pub sibling_check: Option<SiblingCheck>,
+}
+
+/// The two counts of a family checked against `resolve_against`
+/// siblings.
+pub struct SiblingCheck {
+    /// Slots declaring the family.
+    pub declared: fn(&SchemaDefinition) -> usize,
+    /// Claims a dataset states: what the family's check reads when no
+    /// sibling is loaded, every claim then being uncheckable.
+    pub stated: fn(&SchemaDefinition, &crate::instances::InstanceSet) -> usize,
 }
 
 pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
@@ -1683,7 +1701,12 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
-        declared: Some(|schema| absence_bindings(schema).len()),
+        sibling_check: Some(SiblingCheck {
+            declared: |schema| absence_bindings(schema).len(),
+            stated: |schema, set| {
+                unverified_absences(schema, set, &absence_bindings(schema), &[]).read()
+            },
+        }),
     },
     SlotSemanticsFamily {
         noun: "anchor-expansion",
@@ -1694,7 +1717,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
-        declared: None,
+        sibling_check: None,
     },
     SlotSemanticsFamily {
         noun: "version-pin",
@@ -1705,7 +1728,10 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
-        declared: Some(|schema| version_bindings(schema).len()),
+        sibling_check: Some(SiblingCheck {
+            declared: |schema| version_bindings(schema).len(),
+            stated: |schema, set| version_pins(set, &version_bindings(schema), &[]).read(),
+        }),
     },
     SlotSemanticsFamily {
         noun: "value-claim",
@@ -1716,9 +1742,48 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
-        declared: Some(|schema| value_claim_bindings(schema).len()),
+        sibling_check: Some(SiblingCheck {
+            declared: |schema| value_claim_bindings(schema).len(),
+            stated: |schema, set| {
+                value_claims(
+                    schema,
+                    set,
+                    &value_claim_bindings(schema),
+                    &SiblingRecords::index(&[]),
+                )
+                .read()
+            },
+        }),
     },
 ];
+
+/// Claims of one family a dataset states that a check reading no sibling
+/// graph leaves unchecked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncheckedClaims {
+    /// The annotation declaring the family.
+    pub annotation: &'static str,
+    pub count: usize,
+}
+
+/// Each sibling-checked family whose claims `set` states, with how many —
+/// what per-file `verify`, which loads no sibling, reads without checking.
+pub fn unchecked_claims(
+    schema: &SchemaDefinition,
+    set: &crate::instances::InstanceSet,
+) -> Vec<UncheckedClaims> {
+    SLOT_SEMANTICS_FAMILIES
+        .iter()
+        .filter_map(|family| {
+            let check = family.sibling_check.as_ref()?;
+            let count = (check.stated)(schema, set);
+            (count > 0).then_some(UncheckedClaims {
+                annotation: family.annotation,
+                count,
+            })
+        })
+        .collect()
+}
 
 /// The declarations alone — the checker's half of [`version_declarations`].
 pub fn version_bindings(schema: &SchemaDefinition) -> VersionBindings {
@@ -1836,6 +1901,14 @@ pub struct VersionVerification {
     pub pins: usize,
     pub mismatched: Vec<VersionMismatch>,
     pub uncheckable: Vec<UncheckableVersion>,
+}
+
+impl VersionVerification {
+    /// Every claim the check read: the ones it evaluated and the ones it
+    /// could not.
+    pub fn read(&self) -> usize {
+        self.pins + self.uncheckable.len()
+    }
 }
 
 /// A record's single string value at `slot`: `None` when it carries
@@ -2303,6 +2376,14 @@ pub struct ValueClaimVerification {
     /// once per reason.
     pub failures: Vec<FailedValueClaim>,
     pub uncheckable: Vec<UncheckableValueClaim>,
+}
+
+impl ValueClaimVerification {
+    /// Every claim the check read: the ones it evaluated and the ones it
+    /// could not.
+    pub fn read(&self) -> usize {
+        self.claims + self.uncheckable.len()
+    }
 }
 
 /// One sibling's records as the value-claim check looks them up.
@@ -6011,6 +6092,66 @@ classes:
                 .contains("names 2 resolve_against siblings"),
             "a name matching two siblings is uncheckable, not first-match: {:?}",
             ambiguous.uncheckable
+        );
+    }
+
+    #[test]
+    fn unchecked_claims_count_what_each_familys_check_reads() {
+        let schema = parse(
+            "id: https://example.org/b\nname: b\nclasses:\n  Bench:\n    tree_root: true\n    \
+             slots: [id, target, target_version, questions, probes]\n  Question:\n    slots: [id, \
+             unconnected, unreferenced, scoped, expected_values]\n    slot_usage:\n      scoped:\n        \
+             annotations:\n          asserts_absence:\n            value: null\n  Probe:\n    \
+             slots: [id, scoped]\n  ExpectedValue:\n    slots: [record, slot, value]\n\
+             slots:\n  id: {identifier: true}\n  target: {range: string}\n  target_version:\n    \
+             range: string\n    annotations:\n      records_version_of:\n        value:\n          \
+             sibling_slot: target\n  questions: {range: Question, multivalued: true, \
+             inlined_as_list: true}\n  probes: {range: Probe, multivalued: true, inlined_as_list: \
+             true}\n  scoped: {range: uriorcurie, multivalued: true}\n  unconnected:\n    range: \
+             uriorcurie\n    multivalued: true\n    annotations:\n      asserts_absence:\n        \
+             value: null\n  unreferenced:\n    range: uriorcurie\n    multivalued: true\n    \
+             annotations:\n      asserts_absence:\n        value: null\n  record: {range: \
+             uriorcurie}\n  slot: {range: string}\n  value: {range: string}\n  expected_values:\n    \
+             range: ExpectedValue\n    multivalued: true\n    inlined_as_list: true\n    \
+             annotations:\n      asserts_value:\n        value:\n          record_slot: record\n          \
+             slot_slot: slot\n          value_slot: value\n",
+        );
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\ntarget: cat\ntarget_version: [1.0.0, 2.0.0]\nprobes:\n  - {id: p1, scoped: \
+             ['ex:d']}\nquestions:\n  - id: q1\n    unconnected: ['ex:a', 'ex:b']\n    \
+             unreferenced: ['ex:c']\n    scoped: ['ex:c']\n    expected_values:\n      - {record: \
+             'ex:a', slot: s, value: v}\n      - {record: 'ex:b', slot: s, value: w}\n  - id: q2\n    \
+             expected_values:\n      - {record: 'ex:a', slot: s, value: v}\n      - orphan\n  \
+             - id: q3\n",
+        )
+        .expect("yaml");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let unchecked = unchecked_claims(&schema, &set);
+        assert_eq!(
+            unchecked
+                .iter()
+                .map(|u| (u.annotation, u.count))
+                .collect::<Vec<_>>(),
+            vec![
+                ("asserts_absence", 3),
+                ("records_version_of", 1),
+                ("asserts_value", 4),
+            ],
+            "an absence claim and a pin count once per record and slot however many values \
+             they list, and a class-scoped claim only on the class it governs; a value claim \
+             counts each entry, one that names no record included; a record stating nothing \
+             counts nothing"
+        );
+
+        let silent: serde_norway::Value =
+            serde_norway::from_str("id: b2\nquestions:\n  - id: q4\n").expect("yaml");
+        assert_eq!(
+            unchecked_claims(
+                &schema,
+                &crate::instances::InstanceSet::from_linkml_data(&schema, &silent)
+            ),
+            vec![],
+            "a dataset stating no claim has nothing unchecked"
         );
     }
 

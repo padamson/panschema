@@ -443,10 +443,10 @@ fn check_resolve_against(
     let keep_sibling_graphs = !bindings.is_empty() || !value_claims.is_empty();
     let unverified_note = || {
         for family in panschema::diagnostics::SLOT_SEMANTICS_FAMILIES {
-            let Some(declared) = family.declared else {
+            let Some(check) = &family.sibling_check else {
                 continue;
             };
-            let count = declared(schema);
+            let count = (check.declared)(schema);
             if count > 0 {
                 eprintln!(
                     "note: schema `{name}` declares {count} {} slot(s) (`{}`), but [check.{name}] \
@@ -2402,6 +2402,25 @@ fn verify_datasets(
     Ok((violation_count, sets))
 }
 
+/// Note, per file and claim family, the claims the data states that the
+/// per-file form leaves unchecked: it reads no sibling graph, so a false
+/// claim would otherwise pass as conforming.
+fn print_unchecked_claims(
+    schema: &panschema::linkml::SchemaDefinition,
+    sets: &[(String, panschema::instances::InstanceSet)],
+) {
+    for (label, set) in sets {
+        for unchecked in panschema::diagnostics::unchecked_claims(schema, set) {
+            eprintln!(
+                "note: {label}: {} `{}` claim(s) not checked; checking them needs the sibling \
+                 graphs they name, which bare `panschema verify` loads from a manifest's \
+                 `resolve_against`",
+                unchecked.count, unchecked.annotation
+            );
+        }
+    }
+}
+
 /// Verify LinkML instance-data files against their schema, printing every
 /// violation and exiting 1 when the data does not conform. Given more
 /// than one file, each is verified on its own and the set is then checked for
@@ -2417,6 +2436,7 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> any
     // reader cannot tell which dataset each line came from.
     let label_lines = data_paths.len() > 1;
     let (violation_count, sets) = verify_datasets(&schema, data_paths, label_lines, "", verbose)?;
+    print_unchecked_claims(&schema, &sets);
 
     if violation_count == 0 {
         // With several roots in play, "conforms" alone is ambiguous: a file
