@@ -35,10 +35,6 @@ const CRATE_JS: &str = "viz-bundle/panschema_viz.js";
 const CRATE_WASM: &str = "viz-bundle/panschema_viz_bg.wasm";
 
 fn main() {
-    println!("cargo:rerun-if-changed={PKG_JS}");
-    println!("cargo:rerun-if-changed={PKG_WASM}");
-    println!("cargo:rerun-if-changed={CRATE_JS}");
-    println!("cargo:rerun-if-changed={CRATE_WASM}");
     emit_build_version();
 
     if Path::new(CRATE_JS).exists() && Path::new(CRATE_WASM).exists() {
@@ -88,7 +84,13 @@ fn main() {
 /// Copy the bundle into `OUT_DIR`, the one location `html_writer.rs`
 /// embeds from — so the workspace layout and the packaged-crate layout
 /// compile identically.
+///
+/// Only the staged pair is watched: cargo treats a missing
+/// `rerun-if-changed` path as always stale, so watching the absent
+/// layout would rerun this script and recompile the crate on every build.
 fn stage_bundle(js: &str, wasm: &str) {
+    println!("cargo:rerun-if-changed={js}");
+    println!("cargo:rerun-if-changed={wasm}");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
     let out = Path::new(&out_dir);
     std::fs::copy(js, out.join("panschema_viz.js"))
