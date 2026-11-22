@@ -2468,10 +2468,7 @@ fn print_unchecked_claims(
     for (label, set) in sets {
         let unchecked = panschema::diagnostics::unchecked_claims(schema, set);
         for family in &unchecked {
-            eprintln!(
-                "note: {label}: {} `{}` claim(s) not checked",
-                family.count, family.annotation
-            );
+            eprintln!("note: {label}: {}", family.message());
         }
         if !unchecked.is_empty() {
             stating.push(label);
@@ -2507,9 +2504,8 @@ fn claims_without_siblings(
     for (label, set) in datasets {
         for family in panschema::diagnostics::unchecked_claims(schema, set) {
             eprintln!(
-                "warning: {label}: {} `{}` claim(s) not checked: [check.{name}] names no \
-                 resolve_against siblings",
-                family.count, family.annotation
+                "warning: {label}: {}: [check.{name}] names no resolve_against siblings",
+                family.message()
             );
             unread += family.count;
         }

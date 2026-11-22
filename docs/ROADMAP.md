@@ -182,7 +182,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 54 | [Book Editions as Declared Spans](features/54-book-editions-as-declared-spans.md) | `mdbook-panschema editions` publishes the editions the author declares, each a book directory on `main` covering a span of releases | **Shipped for v0.6.0** |
 | 51 | [Published Page Information Architecture](features/51-published-page-information-architecture.md) | The schema page grouped into Overview, Schema, and Instances, with a metadata card per dataset | **Slices 1–2 shipped for v0.5.0; slice 3 proposed** |
 | 55 | [Mixin Classes](features/55-mixin-classes.md) | A `mixin: true` class is modeled: no unmodeled warning, no Postgres table, always a Rust trait, a docs badge | **Complete; ships in the next release** |
-| 56 | [Testing Declared Claims](features/56-testing-declared-claims.md) | `verify --entry <name> --data <file>` checks a fixture against the manifest's graphs; `verify --format json` writes every finding with a kind; per-file `verify` notes claims it did not check | **In progress** |
+| 56 | [Testing Declared Claims](features/56-testing-declared-claims.md) | `verify --entry <name> --data <file>` checks a fixture against the manifest's graphs; `verify --message-format json` writes every finding with a kind; per-file `verify` notes claims it did not check | **In progress** |
 
 ## Delivery Approach
 

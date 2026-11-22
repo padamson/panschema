@@ -11,8 +11,8 @@ pub mod html_writer;
 pub mod io;
 // The model crate owns these; re-exported at the paths they have always had.
 pub use panschema_model::{
-    diagnostics, import_resolve, instances, linkml, linkml_resolve, merged_schema, primitives,
-    rules, yaml_reader,
+    diagnostics, findings, import_resolve, instances, linkml, linkml_resolve, merged_schema,
+    primitives, rules, yaml_reader,
 };
 pub mod json_schema_writer;
 pub mod labels;

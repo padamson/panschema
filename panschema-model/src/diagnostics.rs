@@ -25,6 +25,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::findings::{Finding, finding, kind};
 use crate::linkml::{SchemaDefinition, SlotDefinition};
 
 /// Class-level LinkML keys panschema parses but deliberately does NOT
@@ -1056,6 +1057,12 @@ impl UnresolvedSiblingReference {
     }
 }
 
+finding!(
+    UnresolvedSiblingReference,
+    kind::REFERENCE_UNRESOLVED,
+    referrer
+);
+
 /// The IRIs `sets` mint under `schema`'s rules — the sibling side of a
 /// `resolve_against` check. Uses the same minting the RDF emission uses,
 /// so a `key`-scoped record's IRI (minted beneath its dataset root) is
@@ -1093,6 +1100,12 @@ impl UncoveredSiblingReference {
         )
     }
 }
+
+finding!(
+    UncoveredSiblingReference,
+    kind::REFERENCE_UNCOVERED,
+    referrer
+);
 
 /// What a `resolve_against` pass found in one dataset: how many external
 /// references target a sibling-owned namespace at all, which of those no
@@ -1192,6 +1205,12 @@ impl UnverifiedAbsence {
     }
 }
 
+finding!(
+    UnverifiedAbsence,
+    kind::ABSENCE_CLAIM_CONTRADICTED,
+    referrer
+);
+
 /// A stated absence claim the check could not evaluate, and why — an
 /// uncheckable claim is never counted as holding.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1210,6 +1229,12 @@ impl UncheckableAbsence {
         )
     }
 }
+
+finding!(
+    UncheckableAbsence,
+    kind::ABSENCE_CLAIM_UNCHECKABLE,
+    referrer
+);
 
 /// What an absence-verification pass found over one referring dataset.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1681,14 +1706,16 @@ pub struct SlotSemanticsFamily {
     pub sibling_check: Option<SiblingCheck>,
 }
 
-/// The two counts of a family checked against `resolve_against`
-/// siblings.
+/// What a family checked against `resolve_against` siblings states: its
+/// two counts, and the kind it reports for claims left unchecked.
 pub struct SiblingCheck {
     /// Slots declaring the family.
     pub declared: fn(&SchemaDefinition) -> usize,
     /// Claims a dataset states: what the family's check reads when no
     /// sibling is loaded, every claim then being uncheckable.
     pub stated: fn(&SchemaDefinition, &crate::instances::InstanceSet) -> usize,
+    /// The kind of the finding that reports stated claims left unchecked.
+    pub unchecked_kind: &'static str,
 }
 
 pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
@@ -1706,6 +1733,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
             stated: |schema, set| {
                 unverified_absences(schema, set, &absence_bindings(schema), &[]).read()
             },
+            unchecked_kind: kind::ABSENCE_CLAIM_UNCHECKED,
         }),
     },
     SlotSemanticsFamily {
@@ -1731,6 +1759,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
         sibling_check: Some(SiblingCheck {
             declared: |schema| version_bindings(schema).len(),
             stated: |schema, set| version_pins(set, &version_bindings(schema), &[]).read(),
+            unchecked_kind: kind::VERSION_PIN_UNCHECKED,
         }),
     },
     SlotSemanticsFamily {
@@ -1753,6 +1782,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 )
                 .read()
             },
+            unchecked_kind: kind::VALUE_CLAIM_UNCHECKED,
         }),
     },
 ];
@@ -1764,6 +1794,26 @@ pub struct UncheckedClaims {
     /// The annotation declaring the family.
     pub annotation: &'static str,
     pub count: usize,
+    /// The family's kind for claims left unchecked.
+    pub kind: &'static str,
+}
+
+impl UncheckedClaims {
+    pub fn message(&self) -> String {
+        format!("{} `{}` claim(s) not checked", self.count, self.annotation)
+    }
+}
+
+impl Finding for UncheckedClaims {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+    fn place(&self) -> Option<&str> {
+        None
+    }
+    fn message(&self) -> String {
+        UncheckedClaims::message(self)
+    }
 }
 
 /// Each sibling-checked family whose claims `set` states, with how many —
@@ -1780,6 +1830,7 @@ pub fn unchecked_claims(
             (count > 0).then_some(UncheckedClaims {
                 annotation: family.annotation,
                 count,
+                kind: check.unchecked_kind,
             })
         })
         .collect()
@@ -1878,6 +1929,8 @@ impl VersionMismatch {
     }
 }
 
+finding!(VersionMismatch, kind::VERSION_PIN_MISMATCHED, record);
+
 /// A pin that could not be evaluated, with the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UncheckableVersion {
@@ -1894,6 +1947,8 @@ impl UncheckableVersion {
         )
     }
 }
+
+finding!(UncheckableVersion, kind::VERSION_PIN_UNCHECKABLE, record);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VersionVerification {
@@ -2351,6 +2406,23 @@ impl FailedValueClaim {
     }
 }
 
+impl Finding for FailedValueClaim {
+    fn kind(&self) -> &'static str {
+        match self.kind {
+            ValueClaimFailureKind::Differs { .. } => kind::VALUE_CLAIM_DIFFERS,
+            ValueClaimFailureKind::Unset { .. } => kind::VALUE_CLAIM_UNSET,
+            ValueClaimFailureKind::SlotNotCarried { .. } => kind::VALUE_CLAIM_SLOT_NOT_CARRIED,
+            ValueClaimFailureKind::NotAmong { .. } => kind::VALUE_CLAIM_NOT_AMONG,
+        }
+    }
+    fn place(&self) -> Option<&str> {
+        Some(&self.entry)
+    }
+    fn message(&self) -> String {
+        FailedValueClaim::message(self)
+    }
+}
+
 /// A value claim that could not be evaluated, with the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UncheckableValueClaim {
@@ -2366,6 +2438,8 @@ impl UncheckableValueClaim {
         )
     }
 }
+
+finding!(UncheckableValueClaim, kind::VALUE_CLAIM_UNCHECKABLE, entry);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ValueClaimVerification {
@@ -3537,6 +3611,8 @@ impl IriCollision {
     }
 }
 
+finding!(IriCollision, kind::DATASET_IRI_COLLISION, iri);
+
 /// Every IRI that two or more of `datasets` both mint — the records that
 /// silently become one individual when the datasets are loaded together.
 ///
@@ -3605,6 +3681,8 @@ impl UnintendedSplit {
         )
     }
 }
+
+finding!(UnintendedSplit, kind::DATASET_UNINTENDED_SPLIT, id);
 
 /// Records that scoping has split: the same id, of the same class, defined in
 /// datasets that mint it to different IRIs.
@@ -6130,17 +6208,25 @@ classes:
         assert_eq!(
             unchecked
                 .iter()
-                .map(|u| (u.annotation, u.count))
+                .map(|u| (u.annotation, u.count, Finding::kind(u), u.place()))
                 .collect::<Vec<_>>(),
             vec![
-                ("asserts_absence", 3),
-                ("records_version_of", 1),
-                ("asserts_value", 4),
+                ("asserts_absence", 3, "absence-claim/unchecked", None),
+                ("records_version_of", 1, "version-pin/unchecked", None),
+                ("asserts_value", 4, "value-claim/unchecked", None),
             ],
             "an absence claim and a pin count once per record and slot however many values \
              they list, and a class-scoped claim only on the class it governs; a value claim \
              counts each entry, one that names no record included; a record stating nothing \
              counts nothing"
+        );
+
+        let sentence = unchecked[0].message();
+        assert!(
+            sentence.contains('3')
+                && sentence.contains("`asserts_absence`")
+                && Finding::message(&unchecked[0]) == sentence,
+            "the sentence gives the count and the annotation; got: {sentence}"
         );
 
         let silent: serde_norway::Value =
@@ -6152,6 +6238,164 @@ classes:
             ),
             vec![],
             "a dataset stating no claim has nothing unchecked"
+        );
+    }
+
+    #[test]
+    fn each_cross_graph_finding_says_its_kind_and_the_place_it_is_about() {
+        let value_claim = |kind| FailedValueClaim {
+            entry: "q1.expected_values[0]".to_string(),
+            record: "https://example.org/catalog/aws".to_string(),
+            slot: "tier".to_string(),
+            value: "silver".to_string(),
+            kind,
+        };
+        let sibling = || "catalog".to_string();
+        let findings: Vec<(Box<dyn Finding>, &str, &str)> = vec![
+            (
+                Box::new(UnresolvedSiblingReference {
+                    referrer: "q1".to_string(),
+                    property: "anchors".to_string(),
+                    target: "cat:gone".to_string(),
+                    expanded: "https://example.org/catalog/gone".to_string(),
+                }),
+                "reference/unresolved",
+                "q1",
+            ),
+            (
+                Box::new(UncoveredSiblingReference {
+                    referrer: "q2".to_string(),
+                    property: "anchors".to_string(),
+                    target: "other:x".to_string(),
+                }),
+                "reference/uncovered",
+                "q2",
+            ),
+            (
+                Box::new(UnverifiedAbsence {
+                    referrer: "q3".to_string(),
+                    anchors: vec!["cat:aws".to_string()],
+                    via: None,
+                    joined_by: "p1".to_string(),
+                }),
+                "absence-claim/contradicted",
+                "q3",
+            ),
+            (
+                Box::new(UncheckableAbsence {
+                    referrer: "q4".to_string(),
+                    reason: "an anchor is null".to_string(),
+                }),
+                "absence-claim/uncheckable",
+                "q4",
+            ),
+            (
+                Box::new(VersionMismatch {
+                    record: "b1".to_string(),
+                    slot: "target_version".to_string(),
+                    declared: "1.0.0".to_string(),
+                    sibling: sibling(),
+                    actual: "1.1.0".to_string(),
+                }),
+                "version-pin/mismatched",
+                "b1",
+            ),
+            (
+                Box::new(UncheckableVersion {
+                    record: "b2".to_string(),
+                    slot: "target_version".to_string(),
+                    detail: "names no sibling".to_string(),
+                }),
+                "version-pin/uncheckable",
+                "b2",
+            ),
+            (
+                Box::new(value_claim(ValueClaimFailureKind::Differs {
+                    sibling: sibling(),
+                    actual: vec!["gold".to_string()],
+                })),
+                "value-claim/differs",
+                "q1.expected_values[0]",
+            ),
+            (
+                Box::new(value_claim(ValueClaimFailureKind::Unset {
+                    sibling: sibling(),
+                })),
+                "value-claim/unset",
+                "q1.expected_values[0]",
+            ),
+            (
+                Box::new(value_claim(ValueClaimFailureKind::SlotNotCarried {
+                    sibling: sibling(),
+                    class: "Provider".to_string(),
+                })),
+                "value-claim/slot-not-carried",
+                "q1.expected_values[0]",
+            ),
+            (
+                Box::new(value_claim(ValueClaimFailureKind::NotAmong {
+                    container: "q1".to_string(),
+                    among: "unconnected".to_string(),
+                })),
+                "value-claim/not-among",
+                "q1.expected_values[0]",
+            ),
+            (
+                Box::new(UncheckableValueClaim {
+                    entry: "q5.expected_values[2]".to_string(),
+                    detail: "names no record".to_string(),
+                }),
+                "value-claim/uncheckable",
+                "q5.expected_values[2]",
+            ),
+            (
+                Box::new(IriCollision {
+                    iri: "https://example.org/catalog/aws".to_string(),
+                    occurrences: vec![],
+                }),
+                "dataset/iri-collision",
+                "https://example.org/catalog/aws",
+            ),
+            (
+                Box::new(UnintendedSplit {
+                    id: "aws".to_string(),
+                    class: "Provider".to_string(),
+                    datasets: vec![],
+                }),
+                "dataset/unintended-split",
+                "aws",
+            ),
+        ];
+        for (finding, kind, place) in &findings {
+            assert_eq!(
+                (finding.kind(), finding.place()),
+                (*kind, Some(*place)),
+                "`{}` reports its kind and place",
+                finding.message()
+            );
+            assert!(
+                finding.message().contains(place),
+                "the sentence of a `{kind}` finding names `{place}`; got: {}",
+                finding.message()
+            );
+        }
+
+        let unchecked = SLOT_SEMANTICS_FAMILIES
+            .iter()
+            .filter_map(|family| Some(family.sibling_check.as_ref()?.unchecked_kind));
+        assert_eq!(
+            findings
+                .iter()
+                .map(|(_, kind, _)| *kind)
+                .chain(unchecked)
+                .collect::<BTreeSet<_>>(),
+            crate::findings::kind::ALL
+                .iter()
+                .copied()
+                .filter(|kind| !kind.starts_with("conformance/"))
+                .collect(),
+            "the findings here and each family's unchecked kind are every listed kind outside \
+             conformance, each once"
         );
     }
 

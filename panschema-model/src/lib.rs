@@ -81,6 +81,7 @@
 use std::path::Path;
 
 pub mod diagnostics;
+pub mod findings;
 pub mod import_resolve;
 pub mod instances;
 pub mod io;

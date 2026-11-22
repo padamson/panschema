@@ -62,21 +62,24 @@ The fixture script then decides pass or fail by matching message text, so reword
 
 ### Slice 3: Findings as JSON Lines
 
-**Status:** Not Started
+**Status:** In Progress
 
 **User Value:** A script matches each finding by its kind and place, and is not broken when a message is reworded.
 
 **Acceptance Criteria:**
-- [ ] `verify --format json` writes one JSON object per line to stdout, in either form: one per finding as it is found, then the summary lines, then one closing object with the outcome. The human output on stderr is unchanged.
-- [ ] Each finding object carries `reason: "finding"`, a `kind`, a `level` (`warning`, `error`, or `note`, as the human line is prefixed), the `file` it was found in, the `place` in the data it names (a record id, or an entry's place such as `q-07.claims[0]`), the manifest `entry` in manifest mode, and the `message` the human line prints.
-- [ ] Every conformance violation and every cross-graph finding has a kind: an unresolved or uncovered reference, a contradicted or uncheckable absence claim, a mismatched or uncheckable version pin, and a value claim that differs, is unset, names a slot the record's class does not carry, names a record outside its `among` values, or cannot be checked. Kinds are `<family>/<case>` strings, and the same case always yields the same kind.
+- [ ] Every conformance violation and every cross-graph finding has a kind: an unresolved or uncovered reference, a contradicted or uncheckable absence claim, a mismatched or uncheckable version pin, a value claim that differs, is unset, names a slot the record's class does not carry, names a record outside its `among` values, or cannot be checked, and the notes on datasets that overlap and claims left unchecked. Kinds are `<family>/<case>` strings, a claim family's kinds carry the family's own name (`value-claim/not-among`), and the same case always yields the same kind.
+- [ ] `verify --message-format json` writes one JSON object per line to stdout, in either form: one per finding as it is found, then the summary lines, then one closing object with the outcome. Stdout carries nothing else, and the human findings on stderr are unchanged.
+- [ ] Each finding object carries `reason: "finding"`, a `kind`, a `level`, the `file` it was found in, the `place` in the data it names (a record id, or an entry's place such as `q-07.claims[0]`), the manifest `entry` in manifest mode, and the `message` the human line prints.
+- [ ] `level` says what the finding does to the run: `error` when it counts against the exit code as the command was invoked, `warning` when it is reported without failing the run, `note` when it is informational.
 - [ ] Each family that ran writes a summary object with its counts (checked, failed, uncheckable), as the human summary line reports them.
-- [ ] The closing object says whether the run succeeded and how many findings it reported. The exit code is the one the human form returns.
-- [ ] `--format` takes `human` (the default) or `json`; any other value is refused with exit 2.
+- [ ] The closing object says whether the run succeeded and how many findings it reported, and is written whenever the check runs to its end. A run that cannot finish (exit 2) writes none, so a stream without a closing object is a run that did not finish. The exit code is the one the human form returns.
+- [ ] `--message-format` takes `human` (the default) or `json`; any other value is refused with exit 2.
 
 **Notes:**
-- The shape follows `cargo --message-format json`: a `reason` field on every line, objects written as they are produced.
-- Kinds are part of the library API: each finding type in the model crate, and each `ViolationKind`, says its kind.
+- The shape and the flag follow `cargo --message-format json`: a `reason` field on every line, objects written as they are produced. `--format` already names the artifact `generate` writes, and `generate` reports the same findings, so the report's format takes a name free on both.
+- Kinds are part of the library API: every finding type says its kind and place through one trait, the only thing the reporter accepts, so a finding cannot be reported without a kind. The kinds are listed in one place, which keeps the shipped skill's table of them complete.
+- Until Slice 4, a schema load warning is reported with the kind `schema/load-warning`.
+- Considered and left out: findings declared as expected (`--expect <kind>`, a manifest list of must-fail fixtures), which need kinds first and can follow; SARIF, whose annotations need source positions the data reader does not keep; a SHACL validation report, which needs kinds published as IRIs; and each finding's fields as a typed object, which would make every field name a wire contract.
 
 ---
 
@@ -87,7 +90,7 @@ The fixture script then decides pass or fail by matching message text, so reword
 **User Value:** The JSON output names a schema defect by kind as well, so no finding `verify` reports is outside the machine-readable contract.
 
 **Acceptance Criteria:**
-- [ ] Every warning a schema load raises (an unmodeled construct, a dangling reference, a colliding definition, an untyped slot, an impossible rule value, a defective slot-semantics declaration, an import collision the root schema wins, and the rest) reaches `verify --format json` as a finding with its own kind and the schema file it came from.
+- [ ] Every warning a schema load raises (an unmodeled construct, a dangling reference, a colliding definition, an untyped slot, an impossible rule value, a defective slot-semantics declaration, an import collision the root schema wins, and the rest) reaches `verify --message-format json` as a finding with its own kind and the schema file it came from.
 - [ ] The human warning line for each is unchanged.
 - [ ] A library caller of the model crate's loader reads each warning's kind and message without parsing text.
 
@@ -102,7 +105,7 @@ The fixture script then decides pass or fail by matching message text, so reword
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Completed |
 | Slice 2 | Must Have | None | Completed |
-| Slice 3 | Must Have | None | Not Started |
+| Slice 3 | Must Have | None | In Progress |
 | Slice 4 | Must Have | Slice 3 | Not Started |
 
 ---
@@ -119,4 +122,4 @@ The feature is complete when ALL of the following are true:
 - [ ] No clippy warnings: `cargo clippy -- -D warnings`
 - [ ] README.md updated
 - [ ] CHANGELOG.md updated
-- [ ] The shipped `panschema-usage` skill describes `--entry` and `--format json`
+- [ ] The shipped `panschema-usage` skill describes `--entry` and `--message-format json`

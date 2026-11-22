@@ -19,6 +19,12 @@ use regex::Regex;
 use serde_norway::Value;
 use std::fmt;
 
+use crate::findings::{Finding, kind};
+
+/// What [`Violation::record`] holds for a finding about the dataset
+/// itself, which is no record's.
+const DATASET: &str = "(root)";
+
 /// A single way the data fails to conform to the schema.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Violation {
@@ -39,6 +45,18 @@ impl Violation {
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "instance `{}`: {}", self.record, self.detail())
+    }
+}
+
+impl Finding for Violation {
+    fn kind(&self) -> &'static str {
+        self.kind.kind()
+    }
+    fn place(&self) -> Option<&str> {
+        (self.record != DATASET).then_some(&self.record)
+    }
+    fn message(&self) -> String {
+        self.to_string()
     }
 }
 
@@ -196,6 +214,41 @@ pub enum ViolationKind {
 }
 
 impl ViolationKind {
+    /// The kind a program matches on, one of [`kind::ALL`]. It names the
+    /// check and stays the same when a variant here is renamed.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::RequiredSlotAbsent { .. } => kind::REQUIRED_SLOT_ABSENT,
+            Self::SingleValuedSlotRepeated { .. } => kind::SINGLE_VALUED_SLOT_REPEATED,
+            Self::FewerValuesThanMinimum { .. } => kind::FEWER_VALUES_THAN_MINIMUM,
+            Self::MoreValuesThanMaximum { .. } => kind::MORE_VALUES_THAN_MAXIMUM,
+            Self::DesignatorNamesAnotherClass { .. } => kind::DESIGNATOR_NAMES_ANOTHER_CLASS,
+            Self::DesignatorNotAString { .. } => kind::DESIGNATOR_NOT_A_STRING,
+            Self::InvalidPattern { .. } => kind::INVALID_PATTERN,
+            Self::ObjectNamesNoClassRange { .. } => kind::OBJECT_NAMES_NO_CLASS_RANGE,
+            Self::ValueShapeOutsideRange { .. } => kind::VALUE_SHAPE_OUTSIDE_RANGE,
+            Self::ReferenceOutsideUnion { .. } => kind::REFERENCE_OUTSIDE_UNION,
+            Self::ScalarKindOutsideRange { .. } => kind::SCALAR_KIND_OUTSIDE_RANGE,
+            Self::NotAPermissibleValue { .. } => kind::NOT_A_PERMISSIBLE_VALUE,
+            Self::PatternMismatch { .. } => kind::PATTERN_MISMATCH,
+            Self::BelowMinimum { .. } => kind::BELOW_MINIMUM,
+            Self::AboveMaximum { .. } => kind::ABOVE_MAXIMUM,
+            Self::NotNumericUnderBound { .. } => kind::NOT_NUMERIC_UNDER_BOUND,
+            Self::OutsideSpecializedSlot { .. } => kind::OUTSIDE_SPECIALIZED_SLOT,
+            Self::RulePostconditionFailed { .. } => kind::RULE_POSTCONDITION_FAILED,
+            Self::RuleAlternativesFailed { .. } => kind::RULE_ALTERNATIVES_FAILED,
+            Self::DanglingReference(_) => kind::DANGLING_REFERENCE,
+            Self::UndeclaredField(_) => kind::UNDECLARED_FIELD,
+            Self::NoRootMatched { .. } => kind::NO_ROOT_MATCHED,
+            Self::ExpansionGap(_) => kind::EXPANSION_GAP,
+            Self::DuplicateIdentifier { .. } => kind::DUPLICATE_IDENTIFIER,
+            Self::UnusableCollectionEntry(_) => kind::UNUSABLE_COLLECTION_ENTRY,
+            Self::UndeclaredInlining(_) => kind::UNDECLARED_INLINING,
+            Self::RootIdCollidesWithRecord { .. } => kind::ROOT_ID_COLLIDES_WITH_RECORD,
+            Self::DataNotAMapping => kind::DATA_NOT_A_MAPPING,
+        }
+    }
+
     /// What is wrong, as a ready-to-print clause.
     pub fn detail(&self) -> String {
         match self {
@@ -930,7 +983,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     // indistinguishable from "conforms" unless it is said out loud.
     if let Some(candidates) = &set.root_candidates {
         out.push(Violation {
-            record: "(root)".to_string(),
+            record: DATASET.to_string(),
             kind: ViolationKind::NoRootMatched {
                 candidates: candidates.clone(),
             },
@@ -960,7 +1013,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     // rejects the shape, so the gate says so.
     for u in &set.undeclared_inlinings {
         out.push(Violation {
-            record: u.record.clone().unwrap_or_else(|| "(root)".to_string()),
+            record: u.record.clone().unwrap_or_else(|| DATASET.to_string()),
             kind: ViolationKind::UndeclaredInlining(u.clone()),
         });
     }
@@ -1008,7 +1061,7 @@ pub fn instance_set_for(
 ) -> Result<InstanceSet, Box<Violation>> {
     if data.as_mapping().is_none() {
         return Err(Box::new(Violation {
-            record: "(root)".to_string(),
+            record: DATASET.to_string(),
             kind: ViolationKind::DataNotAMapping,
         }));
     }
@@ -3794,6 +3847,298 @@ classes:
             )),
             "an unquotable key is reported as one; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn each_violation_says_its_kind_and_the_record_it_is_about() {
+        use crate::instances::{
+            ExpansionGap, ExpansionGapKind, UndeclaredField, UndeclaredInlining,
+            UnusableCollectionEntry,
+        };
+        let class = || "Wine".to_string();
+        let slot = || "name".to_string();
+        let ranges = || vec!["Winery".to_string()];
+        let text = |value: &str| ScalarValue::String(value.to_string());
+        let kinds: Vec<(ViolationKind, &str)> = vec![
+            (
+                ViolationKind::RequiredSlotAbsent {
+                    class: class(),
+                    slot: slot(),
+                },
+                "conformance/required-slot-absent",
+            ),
+            (
+                ViolationKind::SingleValuedSlotRepeated {
+                    class: class(),
+                    slot: slot(),
+                    count: 2,
+                },
+                "conformance/single-valued-slot-repeated",
+            ),
+            (
+                ViolationKind::FewerValuesThanMinimum {
+                    class: class(),
+                    slot: slot(),
+                    count: 1,
+                    minimum: 2,
+                },
+                "conformance/fewer-values-than-minimum",
+            ),
+            (
+                ViolationKind::MoreValuesThanMaximum {
+                    class: class(),
+                    slot: slot(),
+                    count: 4,
+                    maximum: 3,
+                },
+                "conformance/more-values-than-maximum",
+            ),
+            (
+                ViolationKind::DesignatorNamesAnotherClass {
+                    class: class(),
+                    slot: slot(),
+                    value: "Winery".to_string(),
+                },
+                "conformance/designator-names-another-class",
+            ),
+            (
+                ViolationKind::DesignatorNotAString {
+                    class: class(),
+                    slot: slot(),
+                },
+                "conformance/designator-not-a-string",
+            ),
+            (
+                ViolationKind::InvalidPattern {
+                    class: class(),
+                    slot: slot(),
+                    pattern: "(".to_string(),
+                },
+                "conformance/invalid-pattern",
+            ),
+            (
+                ViolationKind::ObjectNamesNoClassRange {
+                    class: class(),
+                    slot: slot(),
+                    ranges: ranges(),
+                },
+                "conformance/object-names-no-class-range",
+            ),
+            (
+                ViolationKind::ValueShapeOutsideRange {
+                    class: class(),
+                    slot: slot(),
+                    shape: "an object".to_string(),
+                    ranges: ranges(),
+                },
+                "conformance/value-shape-outside-range",
+            ),
+            (
+                ViolationKind::ReferenceOutsideUnion {
+                    class: class(),
+                    slot: slot(),
+                    target: "w1".to_string(),
+                    actual: "Wine".to_string(),
+                    ranges: ranges(),
+                },
+                "conformance/reference-outside-union",
+            ),
+            (
+                ViolationKind::ScalarKindOutsideRange {
+                    class: class(),
+                    slot: slot(),
+                    value: text("ten"),
+                    ranges: vec!["integer".to_string()],
+                    primitives: vec!["integer".to_string()],
+                },
+                "conformance/scalar-kind-outside-range",
+            ),
+            (
+                ViolationKind::NotAPermissibleValue {
+                    class: class(),
+                    slot: slot(),
+                    value: text("mauve"),
+                    enum_name: "Color".to_string(),
+                },
+                "conformance/not-a-permissible-value",
+            ),
+            (
+                ViolationKind::PatternMismatch {
+                    class: class(),
+                    slot: slot(),
+                    value: "x".to_string(),
+                    pattern: "^y$".to_string(),
+                },
+                "conformance/pattern-mismatch",
+            ),
+            (
+                ViolationKind::BelowMinimum {
+                    class: class(),
+                    slot: slot(),
+                    value: 1.0,
+                    minimum: 2.0,
+                },
+                "conformance/below-minimum",
+            ),
+            (
+                ViolationKind::AboveMaximum {
+                    class: class(),
+                    slot: slot(),
+                    value: 3.0,
+                    maximum: 2.0,
+                },
+                "conformance/above-maximum",
+            ),
+            (
+                ViolationKind::NotNumericUnderBound {
+                    class: class(),
+                    slot: slot(),
+                    value: text("ten"),
+                },
+                "conformance/not-numeric-under-bound",
+            ),
+            (
+                ViolationKind::OutsideSpecializedSlot {
+                    class: class(),
+                    slot: slot(),
+                    value: InstanceValue::Scalar(text("x")),
+                    parent: "label".to_string(),
+                },
+                "conformance/outside-specialized-slot",
+            ),
+            (
+                ViolationKind::RulePostconditionFailed {
+                    class: class(),
+                    rule_index: 0,
+                    rule_title: None,
+                    slot: slot(),
+                    failure: SlotConditionFailure::MustBePresent,
+                },
+                "conformance/rule-postcondition-failed",
+            ),
+            (
+                ViolationKind::RuleAlternativesFailed {
+                    class: class(),
+                    rule_index: 0,
+                    rule_title: None,
+                },
+                "conformance/rule-alternatives-failed",
+            ),
+            (
+                ViolationKind::DanglingReference(crate::diagnostics::DanglingInstanceRef {
+                    referrer: "w1".to_string(),
+                    property: "produced_by".to_string(),
+                    target: "gone".to_string(),
+                }),
+                "conformance/dangling-reference",
+            ),
+            (
+                ViolationKind::UndeclaredField(UndeclaredField {
+                    record: "w1".to_string(),
+                    class: class(),
+                    field: "bogus".to_string(),
+                    key_kind: None,
+                }),
+                "conformance/undeclared-field",
+            ),
+            (
+                ViolationKind::NoRootMatched { candidates: vec![] },
+                "conformance/no-root-matched",
+            ),
+            (
+                ViolationKind::ExpansionGap(ExpansionGap {
+                    record: "w1".to_string(),
+                    slot: slot(),
+                    base_slot: "base".to_string(),
+                    kind: ExpansionGapKind::InlineRecord,
+                    supplied_by: None,
+                }),
+                "conformance/expansion-gap",
+            ),
+            (
+                ViolationKind::DuplicateIdentifier {
+                    id: "w1".to_string(),
+                },
+                "conformance/duplicate-identifier",
+            ),
+            (
+                ViolationKind::UnusableCollectionEntry(UnusableCollectionEntry {
+                    record: None,
+                    slot: "wines".to_string(),
+                    key: None,
+                    reason: "is a number".to_string(),
+                }),
+                "conformance/unusable-collection-entry",
+            ),
+            (
+                ViolationKind::UndeclaredInlining(UndeclaredInlining {
+                    record: None,
+                    slot: "wines".to_string(),
+                    ranges: ranges(),
+                    count: 1,
+                    multivalued: true,
+                    inlined: None,
+                }),
+                "conformance/undeclared-inlining",
+            ),
+            (
+                ViolationKind::RootIdCollidesWithRecord {
+                    id: "w1".to_string(),
+                },
+                "conformance/root-id-collides-with-record",
+            ),
+            (
+                ViolationKind::DataNotAMapping,
+                "conformance/data-not-a-mapping",
+            ),
+        ];
+        assert_eq!(
+            kinds
+                .iter()
+                .map(|(_, expected)| *expected)
+                .collect::<std::collections::BTreeSet<_>>(),
+            kind::ALL
+                .iter()
+                .copied()
+                .filter(|kind| kind.starts_with("conformance/"))
+                .collect(),
+            "the violations here report every listed conformance kind, each once"
+        );
+        for (violation_kind, expected) in kinds {
+            let violation = Violation {
+                record: "w1".to_string(),
+                kind: violation_kind,
+            };
+            assert_eq!(
+                (
+                    Finding::kind(&violation),
+                    violation.place(),
+                    Finding::message(&violation)
+                ),
+                (expected, Some("w1"), violation.to_string()),
+                "`{violation}` reports its kind, the record it is about, and its sentence"
+            );
+        }
+
+        let reported = |data: &str| {
+            validate_instance_data(&schema(), &serde_norway::from_str(data).expect("yaml"))
+                .iter()
+                .map(|v| (Finding::kind(v), v.place().map(str::to_string)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            reported("- not a mapping\n"),
+            vec![("conformance/data-not-a-mapping", None)],
+            "a finding about the dataset itself names no place"
+        );
+        assert_eq!(
+            reported("wines: 7\n"),
+            vec![(
+                "conformance/unusable-collection-entry",
+                Some("wines".to_string())
+            )],
+            "a finding about the container's own slot names the slot"
         );
     }
 }
