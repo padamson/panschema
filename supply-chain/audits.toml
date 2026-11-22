@@ -608,6 +608,13 @@ trusted-publisher = "github:rust-lang/flate2-rs"
 start = "2026-11-06"
 end = "2027-09-05"
 
+[[trusted.form_urlencoded]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-02-19"
+end = "2027-11-22"
+notes = "Part of rust-url, same maintainer; Mozilla trusts this publisher for the crate."
+
 [[trusted.hashbrown]]
 criteria = "safe-to-deploy"
 user-id = 2915 # Amanieu d'Antras (Amanieu)
@@ -986,6 +993,13 @@ criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2022-07-03"
 end = "2027-05-10"
+
+[[trusted.url]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-02-18"
+end = "2027-11-22"
+notes = "Maintainer of rust-url; Mozilla trusts this publisher for the crate."
 
 [[trusted.walkdir]]
 criteria = "safe-to-deploy"
