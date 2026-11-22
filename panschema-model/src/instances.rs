@@ -1763,7 +1763,21 @@ impl LinkmlLoader<'_> {
                     ids.push((id, true));
                 }
             }
-            _ => {}
+            serde_norway::Value::Null => {}
+            // LinkML's validator refuses a bare scalar at every multivalued
+            // slot as not a list, whatever its inlining
+            // (`conformance/probe_inlining.py`, the "one id" and "one
+            // integer" forms), so a container collection does not read it
+            // as a one-entry list.
+            other => self.note_unusable(
+                slot,
+                None,
+                format!(
+                    "is {}, not a list or an identifier-keyed dict; write the collection as a \
+                     list, even of one entry",
+                    yaml_kind(other)
+                ),
+            ),
         }
         ids
     }
@@ -2514,9 +2528,9 @@ pub fn points_outside_dataset(schema: &SchemaDefinition, target: &str) -> bool {
     }
 }
 
-/// A human phrase for a YAML value's kind, for a range-kind-mismatch message.
-/// Only reached for a value that fit neither a scalar nor a reference: a
-/// number/boolean at a class-ranged slot, or an object at a scalar-ranged slot.
+/// A human phrase for a YAML value's kind, for a message about a value that
+/// does not fit where it was authored: a number or boolean at a class-ranged slot, an
+/// object at a scalar-ranged one, or a scalar where a collection belongs.
 /// (Null is treated as absent, and a sequence is flattened, before this.)
 fn yaml_kind(value: &serde_norway::Value) -> &'static str {
     match value {
@@ -2526,6 +2540,7 @@ fn yaml_kind(value: &serde_norway::Value) -> &'static str {
         // integer/float split carries no information.
         serde_norway::Value::Number(_) => "a number",
         serde_norway::Value::Mapping(_) => "an object",
+        serde_norway::Value::String(_) => "a string",
         _ => "a value",
     }
 }
@@ -4929,7 +4944,7 @@ wineries:
     }
 
     #[test]
-    fn from_linkml_data_handles_inlined_as_dict_collection() {
+    fn from_linkml_data_reads_container_collection_spellings() {
         let schema = wine_schema();
         // wineries as an identifier-keyed mapping (CompactDict), not a list.
         let data: serde_norway::Value = serde_norway::from_str(
@@ -5059,6 +5074,44 @@ wineries:
                 .any(|u| u.key.as_deref() == Some("group1")),
             "the entry is reported by its key; got: {:?}",
             set.unusable_collection_entries
+        );
+
+        // A bare scalar is neither spelling, and LinkML refuses it as not a
+        // list: it is reported, never dropped. A null is an absent slot.
+        for (scalar, kind) in [
+            ("7", "a number"),
+            ("true", "a boolean"),
+            ("morgonEstate", "a string"),
+        ] {
+            let data: serde_norway::Value =
+                serde_norway::from_str(&format!("wineries: {scalar}\n")).expect("parse data");
+            let set = InstanceSet::from_linkml_data(&schema, &data);
+            let reported: Vec<_> = set
+                .unusable_collection_entries
+                .iter()
+                .map(|u| {
+                    (
+                        u.record.as_deref(),
+                        u.key.as_deref(),
+                        u.slot.as_str(),
+                        u.reason.contains(kind),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                (set.instances.len(), reported),
+                (0, vec![(None, None, "wineries", true)]),
+                "`wineries: {scalar}` builds nothing and is reported once, on the container, as \
+                 {kind}; got: {:?}",
+                set.unusable_collection_entries
+            );
+        }
+        let data: serde_norway::Value = serde_norway::from_str("wineries:\n").expect("parse data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.unusable_collection_entries,
+            Vec::new(),
+            "a null collection is an absent slot"
         );
 
         // The dict spellings survive below the container too: a record's
