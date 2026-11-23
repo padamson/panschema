@@ -1628,10 +1628,21 @@ fn verify_reports_ids_that_mint_one_iri_across_two_data_files() {
             "tests/fixtures/wine_instances.yaml",
             "--data",
             "tests/fixtures/wine_instances_second_dataset.yaml",
+            "--message-format",
+            "json",
         ])
         .output()
         .expect("run panschema");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let lines = json_lines(&out);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["kind"] == "dataset/iri-collision"
+                && line["level"] == "note"
+                && line["file"].is_null()),
+        "the collision is a note about no one file; got:\n{lines:#?}"
+    );
     assert!(
         stderr.contains("minted by more than one dataset")
             && stderr.contains("chateauMorgon")
@@ -2633,6 +2644,16 @@ resolve_against = ["catalog"]
         "the note names the dataset-less sibling; got:\n{}",
         String::from_utf8_lossy(&scaffolded.stderr)
     );
+    let lines = json_lines(&run_in(consumer, &["verify", "--message-format", "json"]));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["kind"] == "check/sibling-declares-no-datasets"
+                && line["level"] == "note"
+                && line["entry"] == "bench"),
+        "the dataset-less sibling is a note under the entry that resolves against it; \
+         got:\n{lines:#?}"
+    );
 
     // An entry resolving against itself is a configuration error.
     fs::write(
@@ -2701,6 +2722,45 @@ fn run_in(consumer: &Path, args: &[&str]) -> std::process::Output {
         .current_dir(consumer)
         .output()
         .expect("run panschema")
+}
+
+/// Every line `--message-format json` wrote to stdout, each parsed as one
+/// JSON object; a line that is not one fails the test.
+fn json_lines(out: &std::process::Output) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("stdout carries a line that is not JSON ({e}): {line}"))
+        })
+        .collect()
+}
+
+fn stderr_of(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// The finding objects among `lines`, as (kind, level) pairs.
+fn kinds_and_levels(lines: &[serde_json::Value]) -> Vec<(String, String)> {
+    lines
+        .iter()
+        .filter(|line| line["reason"] == "finding")
+        .map(|line| {
+            (
+                line["kind"].as_str().unwrap_or_default().to_string(),
+                line["level"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The objects among `lines` that say what a data file was read as.
+fn dataset_reads(lines: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    lines
+        .iter()
+        .filter(|line| line["reason"] == "dataset-read")
+        .cloned()
+        .collect()
 }
 
 /// `[check.<name>].instances` and `[generate.<name>].instances` are a
@@ -3589,6 +3649,27 @@ require_namespace_coverage = true
         "got:\n{}",
         String::from_utf8_lossy(&strict.stderr)
     );
+    let lines = json_lines(&run(&["--strict", "--message-format", "json"]));
+    let reference: Vec<_> = lines
+        .iter()
+        .filter(|line| line["reason"] == "summary" && line["family"] == "reference")
+        .map(|line| {
+            (
+                line["entry"].as_str().unwrap_or_default(),
+                [&line["checked"], &line["failed"], &line["uncheckable"]]
+                    .map(|n| n.as_u64().unwrap()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        (kinds_and_levels(&lines), reference),
+        (
+            vec![("reference/uncovered".to_string(), "error".to_string())],
+            vec![("bench", [1, 0, 1])]
+        ),
+        "the reference summary counts the uncovered reference as one nothing could check, \
+         so its counts fail when the run does; got:\n{lines:#?}"
+    );
 }
 
 /// The cross-graph keys live under `[check.<name>]`; the old
@@ -3841,6 +3922,57 @@ resolve_against = ["catalog"]
         !stderr.contains("note: bench-empty.yaml:") && !stderr.contains("--entry"),
         "data stating no claim gets no note and no hint; got:\n{stderr}"
     );
+    let as_json = run_in(
+        consumer,
+        &[
+            "verify",
+            "--schema",
+            "bench-pkg/bench.yaml",
+            "--data",
+            "bench-data.yaml",
+            "--message-format",
+            "json",
+        ],
+    );
+    let lines = json_lines(&as_json);
+    assert_eq!(
+        kinds_and_levels(&lines),
+        [
+            ("absence-claim/unchecked".to_string(), "note".to_string()),
+            ("version-pin/unchecked".to_string(), "note".to_string()),
+            ("value-claim/unchecked".to_string(), "note".to_string()),
+        ],
+        "per-file JSON reports each family's unchecked claims as notes; got:\n{lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .filter(|line| line["reason"] == "finding")
+            .all(|line| line["file"] == "bench-data.yaml" && line["entry"].is_null()),
+        "each names the file and, outside a manifest, no entry; got:\n{lines:#?}"
+    );
+    assert_eq!(
+        dataset_reads(&lines),
+        [serde_json::json!({
+            "reason": "dataset-read", "entry": null, "file": "bench-data.yaml",
+            "root": "Bench", "records": 3
+        })],
+        "the root the file was read against and its record count, which the `conforms` \
+         line carries for a person; got:\n{lines:#?}"
+    );
+    assert_eq!(
+        (as_json.status.code(), lines.last()),
+        (
+            Some(0),
+            Some(&serde_json::json!({"reason": "verify-finished", "success": true, "findings": 3}))
+        ),
+        "the run closes as a success, and stdout carries no `conforms` line; got:\n{lines:#?}"
+    );
+    assert_eq!(
+        stderr_of(&as_json),
+        stderr_of(&unread),
+        "the human lines on stderr are the same in either format"
+    );
 
     // `--entry` checks named files as one entry's data against the
     // manifest's siblings. The entry's generated and check-only data and
@@ -3963,6 +4095,110 @@ resolve_against = ["catalog"]
             (FOUND, true),
             "a failing claim in a named file fails --strict; got:\n{stderr}"
         );
+        for (strict, code, level) in [(false, Some(0), "warning"), (true, FOUND, "error")] {
+            let mut args = vec![
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/wrong.yaml",
+                "--message-format",
+                "json",
+            ];
+            if strict {
+                args.push("--strict");
+            }
+            let out = verify(consumer, &args);
+            let lines = json_lines(&out);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let differs: Vec<_> = lines
+                .iter()
+                .filter(|line| line["kind"] == "value-claim/differs")
+                .collect();
+            let [finding] = differs[..] else {
+                panic!("one value claim differs (strict {strict}); got:\n{lines:#?}");
+            };
+            assert_eq!(
+                (
+                    &finding["level"],
+                    &finding["file"],
+                    &finding["place"],
+                    &finding["entry"]
+                ),
+                (
+                    &serde_json::json!(level),
+                    &serde_json::json!("fixtures/wrong.yaml"),
+                    &serde_json::json!("q1.expected_values[0]"),
+                    &serde_json::json!("bench")
+                ),
+                "the finding's level is what it does to this run (strict {strict}); \
+                 got:\n{finding}"
+            );
+            assert!(
+                lines
+                    .iter()
+                    .filter(|line| line["reason"] == "finding")
+                    .all(|line| line["level"] == level),
+                "every finding here counts as the value claim does (strict {strict}); \
+                 got:\n{lines:#?}"
+            );
+            assert_eq!(
+                dataset_reads(&lines),
+                [serde_json::json!({
+                    "reason": "dataset-read", "entry": "bench", "file": "fixtures/wrong.yaml",
+                    "root": "Bench", "records": 3
+                })],
+                "the named file is the one read as the entry's data; got:\n{lines:#?}"
+            );
+            let message = finding["message"].as_str().unwrap();
+            assert!(
+                stderr.contains(&format!("warning: fixtures/wrong.yaml: {message}\n")),
+                "the message is the one the human line prints; got:\n{stderr}"
+            );
+            if !strict {
+                assert_eq!(
+                    stderr,
+                    stderr_of(&wrong),
+                    "the human lines on stderr are the same in either format"
+                );
+            }
+            let summaries: Vec<_> = lines
+                .iter()
+                .filter(|line| line["reason"] == "summary")
+                .map(|line| {
+                    assert_eq!(line["entry"], "bench", "a summary names its entry: {line}");
+                    (
+                        line["family"].as_str().unwrap().to_string(),
+                        [&line["checked"], &line["failed"], &line["uncheckable"]]
+                            .map(|n| n.as_u64().unwrap()),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                summaries,
+                [
+                    ("reference".to_string(), [3, 0, 0]),
+                    ("absence-claim".to_string(), [2, 0, 0]),
+                    ("version-pin".to_string(), [1, 0, 0]),
+                    ("value-claim".to_string(), [1, 1, 0]),
+                ],
+                "each family that ran writes its counts; got:\n{lines:#?}"
+            );
+            let findings = lines
+                .iter()
+                .filter(|line| line["reason"] == "finding")
+                .count();
+            assert_eq!(
+                (out.status.code(), lines.last()),
+                (
+                    code,
+                    Some(&serde_json::json!({
+                        "reason": "verify-finished", "success": !strict, "findings": findings
+                    }))
+                ),
+                "the closing object counts the findings and agrees with the exit code \
+                 (strict {strict}); got:\n{lines:#?}"
+            );
+        }
 
         fs::write(fixtures.join("malformed.yaml"), "id: b3\nbogus: 1\n").unwrap();
         let lenient = verify(
@@ -3991,6 +4227,36 @@ resolve_against = ["catalog"]
              got:\n{}",
             String::from_utf8_lossy(&lenient.stderr)
         );
+        let violation = run_in(
+            consumer,
+            &[
+                "verify",
+                "--schema",
+                "bench-pkg/bench.yaml",
+                "--data",
+                "fixtures/malformed.yaml",
+                "--message-format",
+                "json",
+            ],
+        );
+        let lines = json_lines(&violation);
+        assert_eq!(
+            (
+                violation.status.code(),
+                kinds_and_levels(&lines),
+                lines.last().map(|line| line["success"].clone())
+            ),
+            (
+                FOUND,
+                vec![(
+                    "conformance/undeclared-field".to_string(),
+                    "error".to_string()
+                )],
+                Some(serde_json::json!(false))
+            ),
+            "a violation fails the per-file form, so it is an error and the run closes as a \
+             failure; got:\n{lines:#?}"
+        );
 
         // The schema's own diagnostics print but are bare verify's to
         // refuse: a named file's result is its own findings.
@@ -4017,6 +4283,51 @@ resolve_against = ["catalog"]
             (Some(0), true),
             "a schema diagnostic warns without failing a named file that holds; got:\n{stderr}"
         );
+        for (args, entry) in [
+            (
+                &[
+                    "verify",
+                    "--entry",
+                    "bench",
+                    "--data",
+                    "fixtures/holds.yaml",
+                    "--message-format",
+                    "json",
+                ][..],
+                serde_json::json!("bench"),
+            ),
+            (
+                &[
+                    "verify",
+                    "--schema",
+                    "bench-pkg/bench.yaml",
+                    "--data",
+                    "fixtures/holds.yaml",
+                    "--message-format",
+                    "json",
+                ][..],
+                serde_json::Value::Null,
+            ),
+        ] {
+            let lines = json_lines(&run_in(consumer, args));
+            let warning = lines
+                .iter()
+                .find(|line| line["kind"] == "schema/load-warning")
+                .unwrap_or_else(|| {
+                    panic!("the schema's load warning is a finding; got:\n{lines:#?}")
+                });
+            assert!(
+                warning["level"] == "warning"
+                    && warning["entry"] == entry
+                    && warning["file"]
+                        .as_str()
+                        .is_some_and(|f| f.ends_with("bench.yaml"))
+                    && warning["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("Nowhere")),
+                "it warns, naming the schema file and its entry; got:\n{warning}"
+            );
+        }
         fs::write(&bench_schema_path, bench_schema).unwrap();
 
         // With no sibling to read, the claims a named file states are
@@ -4063,6 +4374,28 @@ resolve_against = ["catalog"]
             (FOUND, true),
             "unread claims fail --strict; got:\n{stderr}"
         );
+        let lines = json_lines(&verify(
+            consumer,
+            &[
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/wrong.yaml",
+                "--message-format",
+                "json",
+            ],
+        ));
+        let found = kinds_and_levels(&lines);
+        for (kind, level) in [
+            ("check/no-resolve-against", "note"),
+            ("value-claim/unchecked", "warning"),
+        ] {
+            assert!(
+                found.contains(&(kind.to_string(), level.to_string())),
+                "with no siblings the policy note and the unread claims each carry a kind; \
+                 `{kind}` at `{level}` missing from:\n{lines:#?}"
+            );
+        }
         let states_nothing = verify(
             consumer,
             &["--entry", "bench", "--data", "bench-empty.yaml", "--strict"],
@@ -4111,6 +4444,61 @@ resolve_against = ["catalog"]
                 "{refused} is refused, naming {named}; got:\n{stderr}"
             );
         }
+        let cannot_run = verify(
+            consumer,
+            &[
+                "--entry",
+                "nope",
+                "--data",
+                "fixtures/holds.yaml",
+                "--message-format",
+                "json",
+            ],
+        );
+        assert_eq!(
+            (cannot_run.status.code(), json_lines(&cannot_run)),
+            (COULD_NOT_RUN, vec![]),
+            "a run that cannot finish writes no closing object"
+        );
+        let mut reader_gone = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args([
+                "verify",
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/wrong.yaml",
+                "--strict",
+                "--message-format",
+                "json",
+            ])
+            .current_dir(consumer)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("run panschema");
+        drop(reader_gone.stdout.take());
+        assert_eq!(
+            reader_gone.wait().expect("panschema exits").code(),
+            FOUND,
+            "a reader that stops reading the JSON leaves the exit code the findings earn"
+        );
+        let unknown = verify(
+            consumer,
+            &[
+                "--entry",
+                "bench",
+                "--data",
+                "fixtures/holds.yaml",
+                "--message-format",
+                "xml",
+            ],
+        );
+        assert_eq!(
+            unknown.status.code(),
+            COULD_NOT_RUN,
+            "an unknown message format is refused; got:\n{}",
+            stderr_of(&unknown)
+        );
 
         fs::write(consumer.join("panschema.toml"), manifest).unwrap();
         fs::write(consumer.join("catalog-data.yaml"), catalog_data).unwrap();

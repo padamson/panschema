@@ -39,6 +39,10 @@ Rust's default, and is a bug in panschema.
   its own, then the set is checked for ids that mint to the same IRI across
   files. That overlap is **reported, not an error** — a preview that is a
   subset of a worked example shares records on purpose.
+- `--message-format json` (`verify`) — findings as JSON Lines on stdout, each
+  with a stable `kind`; see [below](#verify---message-format-json). The
+  default, `human`, writes findings to stderr and the per-file form's
+  `conforms` lines to stdout.
 - `--verbose` (`generate`, `verify`) — references that leave a dataset
   (CURIEs or IRIs into another graph) are noted, not checked: by default
   the note gives the count and names five, sorted by referrer id as text (so `d10` comes before `d2`). `--verbose` names
@@ -88,11 +92,64 @@ Rust's default, and is a bug in panschema.
     # does this fixture's claim fail against the manifest's sibling graphs?
     panschema verify --entry bench --data tests/fixtures/wrong-value.yaml --strict
 
+    # the same, as JSON Lines a script matches by kind
+    panschema verify --entry bench --data tests/fixtures/wrong-value.yaml --strict \
+        --message-format json
+
     # first migration for a database that has never seen this schema
     panschema migrate --schema schema/my.yaml --migrations db/migrations/
 
     # same, for every schema whose manifest declares a migrations directory
     panschema migrate
+
+## `verify --message-format json`
+
+With `--message-format json` the human lines stay on stderr, unchanged,
+and stdout carries one JSON object per line and nothing else:
+
+- each finding, as it is found:
+  `{"reason":"finding","kind":"value-claim/differs","level":"error","file":"tests/fixtures/wrong-value.yaml","place":"q1.expected_values[0]","entry":"bench","message":"…"}`.
+  `file`, `place`, and `entry` are `null` when there is none (`entry` is
+  `null` outside a manifest).
+- each data file, as it is read, with the `tree_root` class it was read
+  against (`null` when none was chosen) and the records it held:
+  `{"reason":"dataset-read","entry":"bench","file":"tests/fixtures/wrong-value.yaml","root":"Bench","records":3}`.
+  A file read against the wrong root conforms with no records, so a
+  fixture's script checks `records` as well as the findings. A file that
+  cannot be read as data has a finding and no such object.
+- after every finding, the counts of the reference check and of each claim
+  family that ran, per entry:
+  `{"reason":"summary","entry":"bench","family":"value-claim","checked":4,"failed":1,"uncheckable":0}`.
+  For `reference`, `checked` counts the references into a sibling's
+  namespace, and `uncheckable` those in no covered namespace, counted only
+  where the entry sets `require_namespace_coverage`.
+- last, `{"reason":"verify-finished","success":false,"findings":5}`. A run
+  that cannot finish (exit 2) writes none, so a stream without it is a run
+  that did not finish.
+
+`level` is what the finding does to this run: `error` when it counts
+against the exit code as invoked (a violation in the per-file form;
+under `--strict`, anything bare `verify` or `--entry` would otherwise
+report as a `warning`), `warning` when it is reported without failing,
+`note` when it is informational. A note stays a `note` under `--strict`,
+which never fails on one. A `schema/load-warning` is a `warning` even
+where bare `verify --strict` fails on it. Match on `kind`, never on
+`message`, whose wording can change. A reader that stops reading stdout
+early (`| head -1`, `| grep -q`) does not change the exit code. A schema's load warnings are reported each time it loads, under
+the entry being checked, so a sibling's repeat under each entry that
+resolves against it. The note on references that leave a dataset stays on
+stderr. Every kind:
+
+| Finding | Kinds |
+|---|---|
+| A record that does not conform to the schema | `conformance/required-slot-absent`, `conformance/single-valued-slot-repeated`, `conformance/fewer-values-than-minimum`, `conformance/more-values-than-maximum`, `conformance/designator-names-another-class`, `conformance/designator-not-a-string`, `conformance/invalid-pattern`, `conformance/object-names-no-class-range`, `conformance/value-shape-outside-range`, `conformance/reference-outside-union`, `conformance/scalar-kind-outside-range`, `conformance/not-a-permissible-value`, `conformance/pattern-mismatch`, `conformance/below-minimum`, `conformance/above-maximum`, `conformance/not-numeric-under-bound`, `conformance/outside-specialized-slot`, `conformance/rule-postcondition-failed`, `conformance/rule-alternatives-failed`, `conformance/dangling-reference`, `conformance/undeclared-field`, `conformance/no-root-matched`, `conformance/expansion-gap`, `conformance/duplicate-identifier`, `conformance/unusable-collection-entry`, `conformance/undeclared-inlining`, `conformance/root-id-collides-with-record`, `conformance/data-not-a-mapping` |
+| A reference into a `resolve_against` sibling's namespace | `reference/unresolved`, `reference/uncovered` |
+| An `asserts_absence` claim | `absence-claim/contradicted`, `absence-claim/uncheckable`, `absence-claim/unchecked` |
+| A `records_version_of` pin | `version-pin/mismatched`, `version-pin/uncheckable`, `version-pin/unchecked` |
+| An `asserts_value` claim | `value-claim/differs`, `value-claim/unset`, `value-claim/slot-not-carried`, `value-claim/not-among`, `value-claim/uncheckable`, `value-claim/unchecked` |
+| Datasets that overlap (a note) | `dataset/iri-collision`, `dataset/unintended-split` |
+| A schema load warning: every one, for now | `schema/load-warning` |
+| The entry's `[check.<name>]` policy (a note) | `check/no-resolve-against`, `check/sibling-declares-no-datasets` |
 
 ## `migrate` and the runner's rules
 

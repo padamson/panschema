@@ -6392,10 +6392,18 @@ classes:
             crate::findings::kind::ALL
                 .iter()
                 .copied()
-                .filter(|kind| !kind.starts_with("conformance/"))
+                .filter(|kind| {
+                    !kind.starts_with("conformance/")
+                        && ![
+                            crate::findings::kind::SCHEMA_LOAD_WARNING,
+                            crate::findings::kind::CHECK_NO_RESOLVE_AGAINST,
+                            crate::findings::kind::CHECK_SIBLING_DECLARES_NO_DATASETS,
+                        ]
+                        .contains(kind)
+                })
                 .collect(),
             "the findings here and each family's unchecked kind are every listed kind outside \
-             conformance, each once"
+             conformance and the command's own schema and check notes, each once"
         );
     }
 

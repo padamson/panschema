@@ -62,23 +62,24 @@ The fixture script then decides pass or fail by matching message text, so reword
 
 ### Slice 3: Findings as JSON Lines
 
-**Status:** In Progress
+**Status:** Completed
 
 **User Value:** A script matches each finding by its kind and place, and is not broken when a message is reworded.
 
 **Acceptance Criteria:**
-- [ ] Every conformance violation and every cross-graph finding has a kind: an unresolved or uncovered reference, a contradicted or uncheckable absence claim, a mismatched or uncheckable version pin, a value claim that differs, is unset, names a slot the record's class does not carry, names a record outside its `among` values, or cannot be checked, and the notes on datasets that overlap and claims left unchecked. Kinds are `<family>/<case>` strings, a claim family's kinds carry the family's own name (`value-claim/not-among`), and the same case always yields the same kind.
-- [ ] `verify --message-format json` writes one JSON object per line to stdout, in either form: one per finding as it is found, then the summary lines, then one closing object with the outcome. Stdout carries nothing else, and the human findings on stderr are unchanged.
-- [ ] Each finding object carries `reason: "finding"`, a `kind`, a `level`, the `file` it was found in, the `place` in the data it names (a record id, or an entry's place such as `q-07.claims[0]`), the manifest `entry` in manifest mode, and the `message` the human line prints.
-- [ ] `level` says what the finding does to the run: `error` when it counts against the exit code as the command was invoked, `warning` when it is reported without failing the run, `note` when it is informational.
-- [ ] Each family that ran writes a summary object with its counts (checked, failed, uncheckable), as the human summary line reports them.
-- [ ] The closing object says whether the run succeeded and how many findings it reported, and is written whenever the check runs to its end. A run that cannot finish (exit 2) writes none, so a stream without a closing object is a run that did not finish. The exit code is the one the human form returns.
-- [ ] `--message-format` takes `human` (the default) or `json`; any other value is refused with exit 2.
+- [x] Every conformance violation and every cross-graph finding has a kind: an unresolved or uncovered reference, a contradicted or uncheckable absence claim, a mismatched or uncheckable version pin, a value claim that differs, is unset, names a slot the record's class does not carry, names a record outside its `among` values, or cannot be checked, the notes on datasets that overlap and claims left unchecked, and the notes on a `[check.<name>]` policy that checks nothing. Kinds are `<family>/<case>` strings, a claim family's kinds carry the family's own name (`value-claim/not-among`), and the same case always yields the same kind.
+- [x] `verify --message-format json` writes one JSON object per line to stdout, in either form: one per finding as it is found and one per data file as it is read, then the summary lines, then one closing object with the outcome. Stdout carries nothing else, and the human findings on stderr are unchanged.
+- [x] Each finding object carries `reason: "finding"`, a `kind`, a `level`, the `file` it was found in, the `place` in the data it names (a record id, or an entry's place such as `q-07.claims[0]`), the manifest `entry` in manifest mode, and the `message` the human line prints.
+- [x] `level` says what the finding does to the run: `error` when it counts against the exit code as the command was invoked, `warning` when it is reported without failing the run, `note` when it is informational. A schema load warning is the exception until Slice 4 levels it.
+- [x] Each data file read as instance data writes an object naming the `tree_root` class it was read against and the number of records it held, so a file read against the wrong root, which conforms with no records, is told from one that conforms.
+- [x] Each family that ran writes a summary object with its counts (checked, failed, uncheckable), as the human summary line reports them. Where the entry requires namespace coverage, the reference summary counts a reference in no covered namespace as uncheckable, so no summary reads clean in a run `--strict` fails for that family.
+- [x] The closing object says whether the run succeeded and how many findings it reported, and is written whenever the check runs to its end. A run that cannot finish (exit 2) writes none, so a stream without a closing object is a run that did not finish. The exit code is the one the human form returns, and a consumer that stops reading stdout early does not change it.
+- [x] `--message-format` takes `human` (the default) or `json`; any other value is refused with exit 2.
 
 **Notes:**
 - The shape and the flag follow `cargo --message-format json`: a `reason` field on every line, objects written as they are produced. `--format` already names the artifact `generate` writes, and `generate` reports the same findings, so the report's format takes a name free on both.
 - Kinds are part of the library API: every finding type says its kind and place through one trait, the only thing the reporter accepts, so a finding cannot be reported without a kind. The kinds are listed in one place, which keeps the shipped skill's table of them complete.
-- Until Slice 4, a schema load warning is reported with the kind `schema/load-warning`.
+- Until Slice 4, a schema load warning is reported with the kind `schema/load-warning` at level `warning`. Loader warnings are strings until then, so the reporter cannot tell the ones bare `verify --strict` refuses from the rest, and those are reported at `warning` in a run they fail.
 - Considered and left out: findings declared as expected (`--expect <kind>`, a manifest list of must-fail fixtures), which need kinds first and can follow; SARIF, whose annotations need source positions the data reader does not keep; a SHACL validation report, which needs kinds published as IRIs; and each finding's fields as a typed object, which would make every field name a wire contract.
 
 ---
@@ -91,6 +92,7 @@ The fixture script then decides pass or fail by matching message text, so reword
 
 **Acceptance Criteria:**
 - [ ] Every warning a schema load raises (an unmodeled construct, a dangling reference, a colliding definition, an untyped slot, an impossible rule value, a defective slot-semantics declaration, an import collision the root schema wins, and the rest) reaches `verify --message-format json` as a finding with its own kind and the schema file it came from.
+- [ ] Each load warning's `level` says what it does to the run: `error` under bare `verify --strict` for a warning `--strict` refuses, `warning` otherwise.
 - [ ] The human warning line for each is unchanged.
 - [ ] A library caller of the model crate's loader reads each warning's kind and message without parsing text.
 
@@ -105,7 +107,7 @@ The fixture script then decides pass or fail by matching message text, so reword
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Completed |
 | Slice 2 | Must Have | None | Completed |
-| Slice 3 | Must Have | None | In Progress |
+| Slice 3 | Must Have | None | Completed |
 | Slice 4 | Must Have | Slice 3 | Not Started |
 
 ---

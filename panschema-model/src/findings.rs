@@ -55,6 +55,11 @@ macro_rules! kinds {
 /// [`SLOT_SEMANTICS_FAMILIES`](crate::diagnostics::SLOT_SEMANTICS_FAMILIES)
 /// names it. Adding a kind is not a breaking change; changing one is.
 pub mod kind {
+    /// The family a kind belongs to: the part before its `/`.
+    pub fn family(kind: &str) -> &str {
+        kind.split_once('/').map_or(kind, |(family, _)| family)
+    }
+
     kinds! {
         /// A required slot has no value on the record.
         REQUIRED_SLOT_ABSENT = "conformance/required-slot-absent";
@@ -149,6 +154,17 @@ pub mod kind {
         DATASET_IRI_COLLISION = "dataset/iri-collision";
         /// One record that several datasets define and scope apart.
         DATASET_UNINTENDED_SPLIT = "dataset/unintended-split";
+
+        /// A warning the schema's load raised. Every one shares this kind
+        /// until each says its own.
+        SCHEMA_LOAD_WARNING = "schema/load-warning";
+
+        /// A schema declares claim slots, but its `[check.<name>]` names no
+        /// `resolve_against` siblings to check them against.
+        CHECK_NO_RESOLVE_AGAINST = "check/no-resolve-against";
+        /// A `resolve_against` sibling declares no datasets, so no reference
+        /// into its namespace can resolve.
+        CHECK_SIBLING_DECLARES_NO_DATASETS = "check/sibling-declares-no-datasets";
     }
 }
 
@@ -177,6 +193,7 @@ mod tests {
                 "`{kind}` is `<family>/<case>`, each kebab-case"
             );
             assert!(seen.insert(kind), "`{kind}` is listed once");
+            assert_eq!(kind::family(kind), parts[0], "`{kind}`'s family");
         }
     }
 
@@ -211,7 +228,7 @@ mod tests {
         for kind in kind::ALL {
             let family = kind.split('/').next().expect("a family");
             assert!(
-                ["conformance", "reference", "dataset"].contains(&family)
+                ["conformance", "reference", "dataset", "schema", "check"].contains(&family)
                     || nouns.contains(&family),
                 "`{kind}` belongs to a check's family or to a claim family the table names"
             );

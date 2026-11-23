@@ -7,7 +7,9 @@ use clap_complete::Shell;
 mod components;
 mod server;
 
+use panschema::findings::kind;
 use panschema::io::FormatRegistry;
+use panschema::report::{Effect, File, MessageFormat, Reporter, Text};
 
 /// A check that ran to the end and found something: drift, instance-data
 /// violations, or what `--strict` refuses. `main` exits 1 for it (see
@@ -277,6 +279,14 @@ enum Commands {
         /// first five.
         #[arg(long)]
         verbose: bool,
+
+        /// How findings are reported: `human` lines on stderr, or `json`,
+        /// which adds one JSON object per line on stdout (findings, the
+        /// root and record count each data file was read with, family
+        /// summaries, and a closing `verify-finished` object) and leaves out
+        /// the `conforms` lines the per-file form writes there.
+        #[arg(long, value_enum, default_value_t = MessageFormat::Human)]
+        message_format: MessageFormat,
     },
     /// Write the schema's Postgres DDL as a versioned migration file.
     ///
@@ -442,6 +452,7 @@ fn check_resolve_against(
     resolved_manifest: ResolvedManifest,
     schema: &panschema::linkml::SchemaDefinition,
     registry: &FormatRegistry,
+    reporter: &mut Reporter,
 ) -> anyhow::Result<Vec<String>> {
     let ResolvedManifest {
         manifest,
@@ -462,23 +473,32 @@ fn check_resolve_against(
     let value_claims = panschema::diagnostics::value_claim_bindings(schema);
     // Only the absence and value-claim passes read the sibling records.
     let keep_sibling_graphs = !bindings.is_empty() || !value_claims.is_empty();
-    let unverified_note = || {
+    let unverified_note = |reporter: &mut Reporter| -> std::io::Result<()> {
         for family in panschema::diagnostics::SLOT_SEMANTICS_FAMILIES {
             let Some(check) = &family.sibling_check else {
                 continue;
             };
             let count = (check.declared)(schema);
             if count > 0 {
-                eprintln!(
-                    "note: schema `{name}` declares {count} {} slot(s) (`{}`), but [check.{name}] \
-                     names no resolve_against siblings, so they are not checked",
-                    family.noun, family.annotation
-                );
+                reporter.finding(
+                    Effect::Informs,
+                    File::None,
+                    &Text {
+                        kind: kind::CHECK_NO_RESOLVE_AGAINST,
+                        message: format!(
+                            "schema `{name}` declares {count} {} slot(s) (`{}`), but \
+                             [check.{name}] names no resolve_against siblings, so they are \
+                             not checked",
+                            family.noun, family.annotation
+                        ),
+                    },
+                )?;
             }
         }
+        Ok(())
     };
     let Some(check_cfg) = manifest.check.get(name) else {
-        unverified_note();
+        unverified_note(reporter)?;
         return Ok(Vec::new());
     };
     if check_cfg.resolve_against.is_empty() {
@@ -488,7 +508,7 @@ fn check_resolve_against(
                  namespaces the listed siblings own"
             );
         }
-        unverified_note();
+        unverified_note(reporter)?;
         return Ok(Vec::new());
     }
 
@@ -514,8 +534,8 @@ fn check_resolve_against(
                  manifest"
             );
         };
-        let sibling_schema = panschema::load::load_schema_with_deps(sibling_path, registry, deps)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let sibling_schema =
+            panschema::load::load_schema_reported(sibling_path, registry, deps, reporter)?;
         if !pins.is_empty()
             && let Some(r) = resolved.get(sibling)
         {
@@ -530,11 +550,18 @@ fn check_resolve_against(
         let mut sibling_sets: Vec<panschema::instances::InstanceSet> = Vec::new();
         let sibling_instances = manifest.declared_instances(sibling, manifest_dir, resolved)?;
         if sibling_instances.is_empty() {
-            eprintln!(
-                "note: resolve_against `{sibling}` declares no datasets (no \
-                 `instances` or `datasets` in [check.{sibling}] or \
-                 [generate.{sibling}]); references into its namespace cannot resolve"
-            );
+            reporter.finding(
+                Effect::Informs,
+                File::None,
+                &Text {
+                    kind: kind::CHECK_SIBLING_DECLARES_NO_DATASETS,
+                    message: format!(
+                        "resolve_against `{sibling}` declares no datasets (no `instances` or \
+                         `datasets` in [check.{sibling}] or [generate.{sibling}]); references \
+                         into its namespace cannot resolve"
+                    ),
+                },
+            )?;
         }
         for path in &sibling_instances {
             let set = read_instance_set(&sibling_schema, path)?;
@@ -591,37 +618,33 @@ fn check_resolve_against(
     let mut absences = panschema::diagnostics::AbsenceVerification::default();
     let mut versions = panschema::diagnostics::VersionVerification::default();
     let mut claims = panschema::diagnostics::ValueClaimVerification::default();
+    // The references in no covered namespace, which nothing could check:
+    // counted, and reported, only where the entry requires coverage.
     let mut uncovered = 0usize;
     // One streamed pass per referring file: each file's warnings flush
     // before the next file is even opened, and nothing is retained.
     for path in declared {
         let set = read_instance_set(schema, path)?;
+        let label = path.display().to_string();
+        let file = File::Named(&label);
         let resolution = panschema::diagnostics::resolve_sibling_references(
             schema,
             &set,
             &owned_namespaces,
             &minted,
         );
-        for u in &resolution.unresolved {
-            eprintln!("warning: {}: {}", path.display(), u.message());
-        }
+        reporter.findings(Effect::FailsUnderStrict, file, &resolution.unresolved)?;
         total.checked += resolution.checked;
         total.unresolved.extend(resolution.unresolved);
         if check_cfg.require_namespace_coverage {
-            for u in &resolution.uncovered {
-                eprintln!("warning: {}: {}", path.display(), u.message());
-            }
+            reporter.findings(Effect::FailsUnderStrict, file, &resolution.uncovered)?;
             uncovered += resolution.uncovered.len();
         }
         if !bindings.is_empty() {
             let verification =
                 panschema::diagnostics::unverified_absences(schema, &set, &bindings, &siblings);
-            for u in &verification.uncheckable {
-                eprintln!("warning: {}: {}", path.display(), u.message());
-            }
-            for u in &verification.unverified {
-                eprintln!("warning: {}: {}", path.display(), u.message());
-            }
+            reporter.findings(Effect::FailsUnderStrict, file, &verification.uncheckable)?;
+            reporter.findings(Effect::FailsUnderStrict, file, &verification.unverified)?;
             absences.claims += verification.claims;
             absences.contradicted_claims += verification.contradicted_claims;
             absences.uncheckable.extend(verification.uncheckable);
@@ -629,12 +652,8 @@ fn check_resolve_against(
         }
         if !pins.is_empty() {
             let checked = panschema::diagnostics::version_pins(&set, &pins, &sibling_versions);
-            for u in &checked.uncheckable {
-                eprintln!("warning: {}: {}", path.display(), u.message());
-            }
-            for m in &checked.mismatched {
-                eprintln!("warning: {}: {}", path.display(), m.message());
-            }
+            reporter.findings(Effect::FailsUnderStrict, file, &checked.uncheckable)?;
+            reporter.findings(Effect::FailsUnderStrict, file, &checked.mismatched)?;
             versions.pins += checked.pins;
             versions.mismatched.extend(checked.mismatched);
             versions.uncheckable.extend(checked.uncheckable);
@@ -642,12 +661,8 @@ fn check_resolve_against(
         if let Some(sibling_records) = &sibling_records {
             let checked =
                 panschema::diagnostics::value_claims(schema, &set, &value_claims, sibling_records);
-            for u in &checked.uncheckable {
-                eprintln!("warning: {}: {}", path.display(), u.message());
-            }
-            for f in &checked.failures {
-                eprintln!("warning: {}: {}", path.display(), f.message());
-            }
+            reporter.findings(Effect::FailsUnderStrict, file, &checked.uncheckable)?;
+            reporter.findings(Effect::FailsUnderStrict, file, &checked.failures)?;
             claims.claims += checked.claims;
             claims.failed_claims += checked.failed_claims;
             claims.failures.extend(checked.failures);
@@ -656,52 +671,66 @@ fn check_resolve_against(
     }
 
     let resolved = total.checked - total.unresolved.len();
-    eprintln!(
-        "note: schema `{name}`: {resolved} of {} cross-graph reference(s) into \
-         `{sibling_names}` namespace(s) resolve",
-        total.checked
-    );
+    reporter.summary(
+        &format!(
+            "schema `{name}`: {resolved} of {} cross-graph reference(s) into \
+             `{sibling_names}` namespace(s) resolve",
+            total.checked
+        ),
+        kind::family(kind::REFERENCE_UNRESOLVED),
+        total.checked,
+        total.unresolved.len(),
+        uncovered,
+    )?;
     // "K of N <what> <verb> <sibling names>; U <unit> could not be checked"
-    let family_summary =
-        |what: &str, unit: &str, verb: &str, total: usize, failed: usize, uncheckable: usize| {
-            let mut summary = format!(
-                "note: schema `{name}`: {} of {total} {what} {verb} `{sibling_names}`",
-                total - failed
-            );
-            if uncheckable > 0 {
-                summary.push_str(&format!("; {uncheckable} {unit} could not be checked"));
-            }
-            eprintln!("{summary}");
-        };
+    let mut family_summary = |family: &str,
+                              what: &str,
+                              unit: &str,
+                              verb: &str,
+                              total: usize,
+                              failed: usize,
+                              uncheckable: usize| {
+        let mut summary = format!(
+            "schema `{name}`: {} of {total} {what} {verb} `{sibling_names}`",
+            total - failed
+        );
+        if uncheckable > 0 {
+            summary.push_str(&format!("; {uncheckable} {unit} could not be checked"));
+        }
+        reporter.summary(&summary, family, total, failed, uncheckable)
+    };
     if !bindings.is_empty() {
         family_summary(
+            kind::family(kind::ABSENCE_CLAIM_CONTRADICTED),
             "stated absence claim(s)",
             "claim(s)",
             "hold against",
             absences.claims,
             absences.contradicted_claims,
             absences.uncheckable.len(),
-        );
+        )?;
     }
     if !pins.is_empty() {
         family_summary(
+            kind::family(kind::VERSION_PIN_MISMATCHED),
             "version pin(s)",
             "pin(s)",
             "agree with",
             versions.pins,
             versions.mismatched.len(),
             versions.uncheckable.len(),
-        );
+        )?;
     }
     if !value_claims.is_empty() {
         family_summary(
+            kind::family(kind::VALUE_CLAIM_DIFFERS),
             "value claim(s)",
             "claim(s)",
             "hold against",
             claims.claims,
             claims.failed_claims,
             claims.uncheckable.len(),
-        );
+        )?;
     }
 
     let mut problems = Vec::new();
@@ -918,7 +947,8 @@ fn generate(
             &schema,
             instances,
             instances.len() > 1,
-            "warning: ",
+            Effect::FailsUnderStrict,
+            &mut Reporter::human(),
             verbose,
         )?;
         for (label, set) in &datasets {
@@ -1410,6 +1440,7 @@ fn generate_from_manifest(
                 &schema,
                 &registry,
                 verbose,
+                &mut Reporter::human(),
             )?;
             for (label, set) in &entry.datasets {
                 print_rendering_notes(&schema, label, set);
@@ -2292,14 +2323,22 @@ fn verify_entry(
     schema: &panschema::linkml::SchemaDefinition,
     registry: &FormatRegistry,
     verbose: bool,
+    reporter: &mut Reporter,
 ) -> anyhow::Result<EntryFindings> {
     use anyhow::Context as _;
     let resolved = resolved_manifest.resolved;
     panschema::source::DeclaredDatasets::from_resolved(resolved)
         .check_listed(name, resolved, data)?;
-    let (violations, datasets) = verify_datasets(schema, data, true, "warning: ", verbose)
-        .with_context(|| format!("schema `{name}`, check"))?;
-    let problems = check_resolve_against(name, data, resolved_manifest, schema, registry)
+    let (violations, datasets) = verify_datasets(
+        schema,
+        data,
+        true,
+        Effect::FailsUnderStrict,
+        reporter,
+        verbose,
+    )
+    .with_context(|| format!("schema `{name}`, check"))?;
+    let problems = check_resolve_against(name, data, resolved_manifest, schema, registry, reporter)
         .with_context(|| format!("schema `{name}`, check"))?;
     Ok(EntryFindings {
         schema: panschema::diagnostics::strict_blocking(schema),
@@ -2322,6 +2361,7 @@ fn verify_manifest(
     only: Option<(&str, &[PathBuf])>,
     strict: bool,
     verbose: bool,
+    reporter: &mut Reporter,
 ) -> anyhow::Result<()> {
     let (manifest, manifest_dir) = load_manifest()?;
     let named = match only {
@@ -2336,6 +2376,7 @@ fn verify_manifest(
     };
     if manifest.schemas.is_empty() {
         eprintln!("Manifest has no `[schemas]` entries; nothing to check.");
+        reporter.finish(true)?;
         return Ok(());
     }
     let orphans = manifest.orphan_check_entries();
@@ -2361,13 +2402,22 @@ fn verify_manifest(
         None => manifest.schemas.keys().map(String::as_str).collect(),
     };
     for name in entries {
-        let schema = panschema::load::load_schema_with_deps(&deps[name], &registry, &deps)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        reporter.set_entry(Some(name));
+        let schema =
+            panschema::load::load_schema_reported(&deps[name], &registry, &deps, reporter)?;
         let data = match &named {
             Some((_, files)) => files.clone(),
             None => manifest.declared_instances(name, &manifest_dir, &resolved)?,
         };
-        let entry = verify_entry(name, &data, resolved_manifest, &schema, &registry, verbose)?;
+        let entry = verify_entry(
+            name,
+            &data,
+            resolved_manifest,
+            &schema,
+            &registry,
+            verbose,
+            reporter,
+        )?;
         findings += entry.violations;
         if named.is_some() {
             problems.extend(claims_without_siblings(
@@ -2375,13 +2425,17 @@ fn verify_manifest(
                 &manifest,
                 &schema,
                 &entry.datasets,
-            ));
+                reporter,
+            )?);
         } else {
             findings += entry.schema.total();
         }
         problems.extend(entry.problems);
     }
-    if strict && (findings > 0 || !problems.is_empty()) {
+    reporter.set_entry(None);
+    let fails = strict && (findings > 0 || !problems.is_empty());
+    reporter.finish(!fails)?;
+    if fails {
         let mut parts = problems;
         if findings > 0 {
             let found = if named.is_some() {
@@ -2402,13 +2456,16 @@ fn verify_manifest(
 /// Verify labeled datasets against a loaded schema — per-file
 /// conformance (a file that cannot be read as instance data is itself a
 /// violation, never a vacuous pass) plus the cross-dataset overlap
-/// notes — printing each violation with `prefix` and returning the
-/// count alongside the loaded sets.
+/// notes — reporting each violation through `reporter` and returning the
+/// count alongside the loaded sets. `effect` is what a violation does to
+/// the run, which sets both its human prefix and its JSON level;
+/// `label_lines` is whether the human line names the file.
 fn verify_datasets(
     schema: &panschema::linkml::SchemaDefinition,
     data_paths: &[PathBuf],
     label_lines: bool,
-    prefix: &str,
+    effect: Effect,
+    reporter: &mut Reporter,
     verbose: bool,
 ) -> anyhow::Result<(usize, Vec<(String, panschema::instances::InstanceSet)>)> {
     let mut violation_count = 0usize;
@@ -2420,22 +2477,23 @@ fn verify_datasets(
         let value: serde_norway::Value = serde_norway::from_str(&content)
             .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
 
+        let label = data_path.display().to_string();
         let violations = match panschema::validate::instance_set_for(schema, &value) {
             Ok(set) => {
+                reporter.dataset_read(&label, set.root.as_deref(), set.instances.len())?;
                 print_external_references(&set, verbose);
                 let violations = panschema::validate::validate_instances(schema, &set);
-                sets.push((data_path.display().to_string(), set));
+                sets.push((label.clone(), set));
                 violations
             }
             Err(v) => vec![*v],
         };
-        for v in &violations {
-            if label_lines {
-                eprintln!("{prefix}{}: {v}", data_path.display());
-            } else {
-                eprintln!("{prefix}{v}");
-            }
-        }
+        let file = if label_lines {
+            File::Named(&label)
+        } else {
+            File::Unnamed(&label)
+        };
+        reporter.findings(effect, file, &violations)?;
         violation_count += violations.len();
     }
 
@@ -2447,12 +2505,12 @@ fn verify_datasets(
         .map(|(label, set)| (label.as_str(), set))
         .collect();
     for c in panschema::diagnostics::cross_dataset_iri_collisions(schema, &borrowed) {
-        eprintln!("note: {}", c.message());
+        reporter.finding(Effect::Informs, File::None, &c)?;
     }
     // The inverse hazard, which scoping introduces and the collision check
     // cannot see: one entity each dataset defined for itself.
     for split in panschema::diagnostics::cross_dataset_unintended_splits(schema, &borrowed) {
-        eprintln!("note: {}", split.message());
+        reporter.finding(Effect::Informs, File::None, &split)?;
     }
     Ok((violation_count, sets))
 }
@@ -2460,15 +2518,16 @@ fn verify_datasets(
 /// Note, per file and claim family, the claims the data states that the
 /// per-file form leaves unchecked: it reads no sibling graph, so a false
 /// claim would otherwise pass as conforming.
-fn print_unchecked_claims(
+fn report_unchecked_claims(
     schema: &panschema::linkml::SchemaDefinition,
     sets: &[(String, panschema::instances::InstanceSet)],
-) {
+    reporter: &mut Reporter,
+) -> std::io::Result<()> {
     let mut stating: Vec<&str> = Vec::new();
     for (label, set) in sets {
         let unchecked = panschema::diagnostics::unchecked_claims(schema, set);
         for family in &unchecked {
-            eprintln!("note: {label}: {}", family.message());
+            reporter.finding(Effect::Informs, File::Named(label), family)?;
         }
         if !unchecked.is_empty() {
             stating.push(label);
@@ -2481,6 +2540,7 @@ fn print_unchecked_claims(
             stating.join(" --data ")
         );
     }
+    Ok(())
 }
 
 /// Under `--entry`, the claims the named files state that nothing checks
@@ -2492,43 +2552,68 @@ fn claims_without_siblings(
     manifest: &panschema::manifest::Manifest,
     schema: &panschema::linkml::SchemaDefinition,
     datasets: &[(String, panschema::instances::InstanceSet)],
-) -> Option<String> {
+    reporter: &mut Reporter,
+) -> std::io::Result<Option<String>> {
     let has_siblings = manifest
         .check
         .get(name)
         .is_some_and(|check| !check.resolve_against.is_empty());
     if has_siblings {
-        return None;
+        return Ok(None);
     }
     let mut unread = 0usize;
     for (label, set) in datasets {
         for family in panschema::diagnostics::unchecked_claims(schema, set) {
-            eprintln!(
-                "warning: {label}: {}: [check.{name}] names no resolve_against siblings",
-                family.message()
-            );
+            reporter.finding(
+                Effect::FailsUnderStrict,
+                File::Named(label),
+                &Text {
+                    kind: family.kind,
+                    message: format!(
+                        "{}: [check.{name}] names no resolve_against siblings",
+                        family.message()
+                    ),
+                },
+            )?;
             unread += family.count;
         }
     }
-    (unread > 0).then(|| format!("{unread} claim(s) not checked for want of sibling graphs"))
+    Ok((unread > 0).then(|| format!("{unread} claim(s) not checked for want of sibling graphs")))
 }
 
 /// Verify LinkML instance-data files against their schema, printing every
 /// violation and exiting 1 when the data does not conform. Given more
 /// than one file, each is verified on its own and the set is then checked for
 /// ids that mint to the same IRI across files.
-fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> anyhow::Result<()> {
+fn verify_data(
+    schema_path: &Path,
+    data_paths: &[PathBuf],
+    verbose: bool,
+    reporter: &mut Reporter,
+) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
     // Load through the shared path so `imports:` merge and `is_a`/mixin slots
     // resolve, matching what every other command reads.
-    let schema = panschema::load::load_schema(schema_path, &registry)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let schema = panschema::load::load_schema_reported(
+        schema_path,
+        &registry,
+        &std::collections::BTreeMap::new(),
+        reporter,
+    )?;
 
     // One file's violations read as its own list; several need labelling, or a
     // reader cannot tell which dataset each line came from.
     let label_lines = data_paths.len() > 1;
-    let (violation_count, sets) = verify_datasets(&schema, data_paths, label_lines, "", verbose)?;
-    print_unchecked_claims(&schema, &sets);
+    let (violation_count, sets) = verify_datasets(
+        &schema,
+        data_paths,
+        label_lines,
+        Effect::Fails,
+        reporter,
+        verbose,
+    )?;
+    report_unchecked_claims(&schema, &sets, reporter)?;
+    reporter.finish(violation_count == 0)?;
 
     if violation_count == 0 {
         // With several roots in play, "conforms" alone is ambiguous: a file
@@ -2541,8 +2626,8 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> any
                 .and_then(|(_, set)| set.root.as_deref())
         };
         for data_path in data_paths {
-            match root_of(data_path).filter(|_| several_roots) {
-                Some(root) => println!(
+            let line = match root_of(data_path).filter(|_| several_roots) {
+                Some(root) => format!(
                     "{} conforms to {} (read against `{root}`, {} record(s))",
                     data_path.display(),
                     schema_path.display(),
@@ -2551,12 +2636,13 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> any
                         .map(|(_, set)| set.instances.len())
                         .unwrap_or(0)
                 ),
-                None => println!(
+                None => format!(
                     "{} conforms to {}",
                     data_path.display(),
                     schema_path.display()
                 ),
-            }
+            };
+            reporter.result_line(&line)?;
         }
         Ok(())
     } else if let [only] = data_paths {
@@ -2918,14 +3004,19 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             data,
             strict,
             verbose,
-        } => match schema {
-            Some(schema) => verify_data(&schema, &data, verbose)?,
-            None => verify_manifest(
-                entry.as_deref().map(|entry| (entry, data.as_slice())),
-                strict,
-                verbose,
-            )?,
-        },
+            message_format,
+        } => {
+            let mut reporter = Reporter::new(message_format, strict);
+            match schema {
+                Some(schema) => verify_data(&schema, &data, verbose, &mut reporter)?,
+                None => verify_manifest(
+                    entry.as_deref().map(|entry| (entry, data.as_slice())),
+                    strict,
+                    verbose,
+                    &mut reporter,
+                )?,
+            }
+        }
         Commands::Migrate { schema, migrations } => match (schema, migrations) {
             (Some(schema_path), Some(dir)) => {
                 emit_initial_migration(&schema_path, &dir, &std::collections::BTreeMap::new())?;

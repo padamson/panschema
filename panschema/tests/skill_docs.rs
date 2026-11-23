@@ -130,6 +130,17 @@ fn every_output_format_is_documented() {
 }
 
 #[test]
+fn every_finding_kind_is_documented() {
+    let doc = skill_ref("cli.md");
+    for kind in panschema::findings::kind::ALL {
+        assert!(
+            doc.contains(&format!("`{kind}`")),
+            "finding kind `{kind}` can be reported but is absent from the CLI reference"
+        );
+    }
+}
+
+#[test]
 fn every_generate_manifest_key_is_documented() {
     let doc = skill_ref("manifest.md");
     // The serialized field names are the source of truth for what a manifest
