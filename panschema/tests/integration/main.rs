@@ -4283,52 +4283,99 @@ resolve_against = ["catalog"]
             (Some(0), true),
             "a schema diagnostic warns without failing a named file that holds; got:\n{stderr}"
         );
-        for (args, entry) in [
+        // A dangling range is a defect bare `verify --strict` refuses, so
+        // only there does it fail the run; checking data, it warns.
+        let entry_form = [
+            "verify",
+            "--entry",
+            "bench",
+            "--data",
+            "fixtures/holds.yaml",
+        ];
+        let per_file = [
+            "verify",
+            "--schema",
+            "bench-pkg/bench.yaml",
+            "--data",
+            "fixtures/holds.yaml",
+        ];
+        let bench = serde_json::json!("bench");
+        for (args, entry, level, code) in [
+            (&entry_form[..], &bench, "warning", Some(0)),
             (
-                &[
-                    "verify",
-                    "--entry",
-                    "bench",
-                    "--data",
-                    "fixtures/holds.yaml",
-                    "--message-format",
-                    "json",
-                ][..],
-                serde_json::json!("bench"),
+                &[&entry_form[..], &["--strict"]].concat(),
+                &bench,
+                "warning",
+                Some(0),
             ),
-            (
-                &[
-                    "verify",
-                    "--schema",
-                    "bench-pkg/bench.yaml",
-                    "--data",
-                    "fixtures/holds.yaml",
-                    "--message-format",
-                    "json",
-                ][..],
-                serde_json::Value::Null,
-            ),
+            (&per_file[..], &serde_json::Value::Null, "warning", Some(0)),
+            (&["verify"][..], &bench, "warning", Some(0)),
+            (&["verify", "--strict"][..], &bench, "error", FOUND),
         ] {
-            let lines = json_lines(&run_in(consumer, args));
+            let out = run_in(consumer, &[args, &["--message-format", "json"]].concat());
+            let lines = json_lines(&out);
+            assert_eq!(
+                (
+                    out.status.code(),
+                    lines.last().map(|line| line["success"].clone())
+                ),
+                (code, Some(serde_json::json!(code == Some(0)))),
+                "{args:?}: an `error` is what fails the run; got:\n{lines:#?}"
+            );
             let warning = lines
                 .iter()
-                .find(|line| line["kind"] == "schema/load-warning")
+                .find(|line| line["kind"] == "schema/dangling-reference" && line["entry"] == *entry)
                 .unwrap_or_else(|| {
-                    panic!("the schema's load warning is a finding; got:\n{lines:#?}")
+                    panic!("{args:?}: the dangling range is a finding of its own kind; got:\n{lines:#?}")
                 });
             assert!(
-                warning["level"] == "warning"
-                    && warning["entry"] == entry
+                warning["level"] == level
+                    && warning["place"].is_null()
                     && warning["file"]
                         .as_str()
                         .is_some_and(|f| f.ends_with("bench.yaml"))
                     && warning["message"]
                         .as_str()
                         .is_some_and(|m| m.contains("Nowhere")),
-                "it warns, naming the schema file and its entry; got:\n{warning}"
+                "{args:?}: it is a `{level}` naming the schema file and its entry; got:\n{warning}"
             );
         }
         fs::write(&bench_schema_path, bench_schema).unwrap();
+
+        // A sibling's defect fails the run under its own entry; repeated
+        // under the entry that resolves against it, it warns.
+        let catalog_schema_path = catalog_pkg.join("catalog.yaml");
+        let catalog_schema = fs::read_to_string(&catalog_schema_path).unwrap();
+        fs::write(
+            &catalog_schema_path,
+            format!("{catalog_schema}  stray: {{range: Nowhere}}\n"),
+        )
+        .unwrap();
+        let lines = json_lines(&run_in(
+            consumer,
+            &["verify", "--strict", "--message-format", "json"],
+        ));
+        let mut levels: Vec<(String, String)> = lines
+            .iter()
+            .filter(|line| line["kind"] == "schema/dangling-reference")
+            .map(|line| {
+                (
+                    line["entry"].as_str().unwrap_or_default().to_string(),
+                    line["level"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        levels.sort();
+        assert_eq!(
+            levels,
+            [
+                ("bench".to_string(), "warning".to_string()),
+                ("catalog".to_string(), "error".to_string()),
+            ],
+            "the catalog's dangling range is an error under its own entry and a warning \
+             where bench loads it as a sibling; got:\n{lines:#?}"
+        );
+        fs::write(&catalog_schema_path, catalog_schema).unwrap();
 
         // With no sibling to read, the claims a named file states are
         // findings, never a pass.

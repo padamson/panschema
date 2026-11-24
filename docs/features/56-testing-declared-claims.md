@@ -79,25 +79,30 @@ The fixture script then decides pass or fail by matching message text, so reword
 **Notes:**
 - The shape and the flag follow `cargo --message-format json`: a `reason` field on every line, objects written as they are produced. `--format` already names the artifact `generate` writes, and `generate` reports the same findings, so the report's format takes a name free on both.
 - Kinds are part of the library API: every finding type says its kind and place through one trait, the only thing the reporter accepts, so a finding cannot be reported without a kind. The kinds are listed in one place, which keeps the shipped skill's table of them complete.
-- Until Slice 4, a schema load warning is reported with the kind `schema/load-warning` at level `warning`. Loader warnings are strings until then, so the reporter cannot tell the ones bare `verify --strict` refuses from the rest, and those are reported at `warning` in a run they fail.
+- This slice reported every schema load warning under one placeholder kind, `schema/load-warning`, at level `warning`, since loader warnings were still strings. Slice 4 replaced it with a kind per warning and gave each its level.
 - Considered and left out: findings declared as expected (`--expect <kind>`, a manifest list of must-fail fixtures), which need kinds first and can follow; SARIF, whose annotations need source positions the data reader does not keep; a SHACL validation report, which needs kinds published as IRIs; and each finding's fields as a typed object, which would make every field name a wire contract.
 
 ---
 
 ### Slice 4: Schema load diagnostics carry a kind
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** The JSON output names a schema defect by kind as well, so no finding `verify` reports is outside the machine-readable contract.
 
 **Acceptance Criteria:**
-- [ ] Every warning a schema load raises (an unmodeled construct, a dangling reference, a colliding definition, an untyped slot, an impossible rule value, a defective slot-semantics declaration, an import collision the root schema wins, and the rest) reaches `verify --message-format json` as a finding with its own kind and the schema file it came from.
-- [ ] Each load warning's `level` says what it does to the run: `error` under bare `verify --strict` for a warning `--strict` refuses, `warning` otherwise.
-- [ ] The human warning line for each is unchanged.
-- [ ] A library caller of the model crate's loader reads each warning's kind and message without parsing text.
+- [x] Every warning a schema load raises (an unmodeled construct, a dangling reference, a colliding definition, an untyped slot, an impossible rule value, a defective slot-semantics declaration, an import collision the root schema wins, and the rest) reaches `verify --message-format json` as a finding with its own kind and the schema file it came from.
+- [x] Each load warning's `level` says what it does to the run: `error` under bare `verify --strict` for a warning `--strict` refuses, `warning` otherwise.
+- [x] The human warning line for each is unchanged.
+- [x] A library caller of the model crate's loader reads each warning's kind and message without parsing text.
 
 **Notes:**
 - Changes the type of the loader's warnings from strings to a typed warning, a breaking change for library callers of `panschema-model`.
+- Kinds name what is wrong. A schema defect is `schema/<case>`; a defective slot-semantics declaration carries its family's noun (`value-claim/invalid-declaration`), as the family's other kinds do.
+- The file is the one the warning came from where the loader knows it: the file a reader dropped a construct from, or the import whose definition the root overrode. A diagnostic of the merged schema names the root schema, since the model records no file per element.
+- Which warnings `--strict` refuses is decided by kind, in one place, and the strict gate's counts are taken from the typed warnings, so the reported level and the gate cannot disagree.
+- The `Reader` trait still returns its dropped constructs as strings; the loader reports them as `schema/construct-dropped`. Typing them in the trait would break a second public trait for what is one warning site, in the OWL reader.
+- `panschema-model`'s `load_dataset` gives its own warnings kinds as well: `schema/no-tree-root`, and for a dataset that read no records `conformance/data-not-a-mapping` or `conformance/no-root-matched`, the kinds `verify` reports the same data under. A dataset that is the container with an empty collection holds no records and raises neither.
 
 ---
 
@@ -108,7 +113,7 @@ The fixture script then decides pass or fail by matching message text, so reword
 | Slice 1 | Must Have | None | Completed |
 | Slice 2 | Must Have | None | Completed |
 | Slice 3 | Must Have | None | Completed |
-| Slice 4 | Must Have | Slice 3 | Not Started |
+| Slice 4 | Must Have | Slice 3 | Completed |
 
 ---
 
@@ -116,12 +121,12 @@ The fixture script then decides pass or fail by matching message text, so reword
 
 The feature is complete when ALL of the following are true:
 
-- [ ] All acceptance criteria from user story are met
-- [ ] All vertical slices marked as "Completed"
-- [ ] All tests passing: `cargo nextest run`
-- [ ] Library documentation complete with examples: `cargo doc`
-- [ ] Code formatted: `cargo fmt --check`
-- [ ] No clippy warnings: `cargo clippy -- -D warnings`
-- [ ] README.md updated
-- [ ] CHANGELOG.md updated
-- [ ] The shipped `panschema-usage` skill describes `--entry` and `--message-format json`
+- [x] All acceptance criteria from user story are met
+- [x] All vertical slices marked as "Completed"
+- [x] All tests passing: `cargo nextest run`
+- [x] Library documentation complete with examples: `cargo doc`
+- [x] Code formatted: `cargo fmt --check`
+- [x] No clippy warnings: `cargo clippy -- -D warnings`
+- [x] README.md updated
+- [x] CHANGELOG.md updated
+- [x] The shipped `panschema-usage` skill describes `--entry` and `--message-format json`

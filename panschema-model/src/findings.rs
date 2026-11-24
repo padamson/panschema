@@ -129,6 +129,11 @@ pub mod kind {
         ABSENCE_CLAIM_UNCHECKABLE = "absence-claim/uncheckable";
         /// Stated absences no sibling graph was loaded to check.
         ABSENCE_CLAIM_UNCHECKED = "absence-claim/unchecked";
+        /// A slot's `asserts_absence` declaration the schema cannot honor.
+        ABSENCE_CLAIM_INVALID_DECLARATION = "absence-claim/invalid-declaration";
+
+        /// A slot's `expand_against` declaration the schema cannot honor.
+        ANCHOR_EXPANSION_INVALID_DECLARATION = "anchor-expansion/invalid-declaration";
 
         /// A version pin that disagrees with the version its sibling resolved to.
         VERSION_PIN_MISMATCHED = "version-pin/mismatched";
@@ -136,6 +141,8 @@ pub mod kind {
         VERSION_PIN_UNCHECKABLE = "version-pin/uncheckable";
         /// Version pins no sibling graph was loaded to check.
         VERSION_PIN_UNCHECKED = "version-pin/unchecked";
+        /// A slot's `records_version_of` declaration the schema cannot honor.
+        VERSION_PIN_INVALID_DECLARATION = "version-pin/invalid-declaration";
 
         /// A value claim whose record carries other values at the slot.
         VALUE_CLAIM_DIFFERS = "value-claim/differs";
@@ -149,15 +156,55 @@ pub mod kind {
         VALUE_CLAIM_UNCHECKABLE = "value-claim/uncheckable";
         /// Value claims no sibling graph was loaded to check.
         VALUE_CLAIM_UNCHECKED = "value-claim/unchecked";
+        /// A slot's `asserts_value` declaration the schema cannot honor.
+        VALUE_CLAIM_INVALID_DECLARATION = "value-claim/invalid-declaration";
 
         /// One IRI minted by more than one dataset.
         DATASET_IRI_COLLISION = "dataset/iri-collision";
         /// One record that several datasets define and scope apart.
         DATASET_UNINTENDED_SPLIT = "dataset/unintended-split";
 
-        /// A warning the schema's load raised. Every one shares this kind
-        /// until each says its own.
-        SCHEMA_LOAD_WARNING = "schema/load-warning";
+        /// A construct a schema reader dropped because the model cannot
+        /// hold it.
+        SCHEMA_CONSTRUCT_DROPPED = "schema/construct-dropped";
+        /// An import defines an element the root schema also defines,
+        /// differently; the root's definition is kept.
+        SCHEMA_ROOT_OVERRIDES_IMPORT = "schema/root-overrides-import";
+        /// A slot declared both `identifier` and `key`, in a released
+        /// schema that loads as it shipped.
+        SCHEMA_IDENTIFIER_KEY_CONFLICT = "schema/identifier-key-conflict";
+        /// A key on a class that is parsed but not modeled.
+        SCHEMA_UNMODELED_CONSTRUCT = "schema/unmodeled-construct";
+        /// A `unique_keys` entry naming a slot its class does not have.
+        SCHEMA_UNIQUE_KEY_NAMES_NO_SLOT = "schema/unique-key-names-no-slot";
+        /// A range, parent, mixin, or inverse naming nothing the schema
+        /// defines.
+        SCHEMA_DANGLING_REFERENCE = "schema/dangling-reference";
+        /// A declared URI no declared prefix expands.
+        SCHEMA_UNEXPANDABLE_URI = "schema/unexpandable-uri";
+        /// A class carrying a specializing slot without the slot it
+        /// specializes, so its subset goes unchecked.
+        SCHEMA_SPECIALIZATION_WITHOUT_PARENT = "schema/specialization-without-parent";
+        /// Slot definitions that mint one property IRI.
+        SCHEMA_PROPERTY_IRI_COLLISION = "schema/property-iri-collision";
+        /// Classes or enums that mint one class IRI.
+        SCHEMA_CLASS_IRI_COLLISION = "schema/class-iri-collision";
+        /// A slot that resolves with no `range`.
+        SCHEMA_UNTYPED_SLOT = "schema/untyped-slot";
+        /// An annotation carrying nested annotations or extensions, which
+        /// are dropped.
+        SCHEMA_UNMODELED_ANNOTATION_NESTING = "schema/unmodeled-annotation-nesting";
+        /// An annotation in the `panschema:` namespace that panschema does
+        /// not know.
+        SCHEMA_UNKNOWN_PANSCHEMA_ANNOTATION = "schema/unknown-panschema-annotation";
+        /// A rule condition no conforming value can meet.
+        SCHEMA_IMPOSSIBLE_RULE_VALUE = "schema/impossible-rule-value";
+        /// More than one `tree_root` class, where the metamodel recommends
+        /// at most one.
+        SCHEMA_MULTIPLE_TREE_ROOTS = "schema/multiple-tree-roots";
+        /// No `tree_root` class, so no dataset can be read against the
+        /// schema.
+        SCHEMA_NO_TREE_ROOT = "schema/no-tree-root";
 
         /// A schema declares claim slots, but its `[check.<name>]` names no
         /// `resolve_against` siblings to check them against.

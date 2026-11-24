@@ -961,6 +961,46 @@ pub enum RootSelection {
     Ambiguous(Vec<String>),
 }
 
+/// How many of a dataset's top-level keys name a slot of the container
+/// `class`.
+pub(crate) fn container_slots_named(
+    class: &crate::linkml::ClassDefinition,
+    schema: &SchemaDefinition,
+    container: &serde_norway::Mapping,
+) -> usize {
+    let slots = crate::linkml_resolve::resolve_effective_slots(class, schema);
+    container
+        .keys()
+        .filter_map(serde_norway::Value::as_str)
+        .filter(|key| slots.contains_key(*key))
+        .count()
+}
+
+/// Whether `container` gives one of `class`'s record collections nothing:
+/// a slot ranged on a class, set to an empty list, an empty mapping, or
+/// null.
+pub(crate) fn names_an_empty_collection(
+    class: &crate::linkml::ClassDefinition,
+    schema: &SchemaDefinition,
+    container: &serde_norway::Mapping,
+) -> bool {
+    let slots = crate::linkml_resolve::resolve_effective_slots(class, schema);
+    container.iter().any(|(key, value)| {
+        let ranges_on_a_class = key
+            .as_str()
+            .and_then(|key| slots.get(key))
+            .and_then(|slot| slot.range.as_deref())
+            .is_some_and(|range| schema.classes.contains_key(range));
+        ranges_on_a_class
+            && match value {
+                serde_norway::Value::Null => true,
+                serde_norway::Value::Sequence(items) => items.is_empty(),
+                serde_norway::Value::Mapping(entries) => entries.is_empty(),
+                _ => false,
+            }
+    })
+}
+
 /// Choose the `tree_root` a data file conforms to.
 ///
 /// A schema with one root always yields it, whatever the file holds — a
@@ -988,14 +1028,9 @@ pub fn select_tree_root(
         _ => {}
     }
 
-    let keys: Vec<&str> = container.keys().filter_map(|k| k.as_str()).collect();
     let scored: Vec<(usize, &String)> = roots
         .iter()
-        .map(|(name, class)| {
-            let slots = crate::linkml_resolve::resolve_effective_slots(class, schema);
-            let matched = keys.iter().filter(|k| slots.contains_key(**k)).count();
-            (matched, *name)
-        })
+        .map(|(name, class)| (container_slots_named(class, schema, container), *name))
         .collect();
     match unique_best_scored(&scored) {
         Some(name) => RootSelection::Chosen((*name).clone()),

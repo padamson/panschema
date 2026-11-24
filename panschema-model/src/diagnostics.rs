@@ -715,57 +715,127 @@ pub fn unexpandable_declared_uris(schema: &SchemaDefinition) -> Vec<Unexpandable
     out
 }
 
+/// A defect or deviation a schema's load reports: its kind, which names
+/// the case and stays the same across releases, and the sentence a person
+/// reads. The schema file it came from is the loader's to add
+/// ([`crate::import_resolve::LoadWarning`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemaWarning {
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl SchemaWarning {
+    pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
+        SchemaWarning {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+/// Whether `--strict` refuses a schema that raises a load warning of
+/// `kind`: the kinds [`strict_blocking`] counts.
+pub fn refused_under_strict(kind: &str) -> bool {
+    StrictBlocking::default().count_of(kind).is_some()
+}
+
 /// The format-independent schema diagnostics the shared load path
 /// ([`crate::import_resolve::load_schema`]) returns on the loaded schema
 /// for the command layer to print — unmodeled class constructs, `unique_keys`
 /// naming a slot the class lacks, dangling references, and the rest below —
-/// as ready-to-print message bodies. Format-specific diagnostics
+/// each a [`SchemaWarning`]: its kind, and its message, ready to print.
+/// Format-specific diagnostics
 /// (writer projection gaps, Postgres/SHACL skips) and `--strict` enforcement
 /// stay at the `generate` call site.
-pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
+pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<SchemaWarning> {
+    fn each<T>(
+        out: &mut Vec<SchemaWarning>,
+        kind: &'static str,
+        found: Vec<T>,
+        message: impl Fn(T) -> String,
+    ) {
+        out.extend(
+            found
+                .into_iter()
+                .map(|f| SchemaWarning::new(kind, message(f))),
+        );
+    }
     let mut out = Vec::new();
-    out.extend(
-        unmodeled_class_constructs(schema)
-            .iter()
-            .map(|u| u.message()),
+    each(
+        &mut out,
+        kind::SCHEMA_UNMODELED_CONSTRUCT,
+        unmodeled_class_constructs(schema),
+        |u| u.message(),
     );
-    out.extend(
-        unresolved_unique_key_slots(schema)
-            .iter()
-            .map(|u| u.message()),
+    each(
+        &mut out,
+        kind::SCHEMA_UNIQUE_KEY_NAMES_NO_SLOT,
+        unresolved_unique_key_slots(schema),
+        |u| u.message(),
     );
-    out.extend(dangling_references(schema).iter().map(|d| d.message()));
-    out.extend(
-        unexpandable_declared_uris(schema)
-            .iter()
-            .map(|u| u.message()),
+    each(
+        &mut out,
+        kind::SCHEMA_DANGLING_REFERENCE,
+        dangling_references(schema),
+        |d| d.message(),
     );
-    out.extend(
-        unchecked_specializations(schema)
-            .iter()
-            .map(|u| u.message()),
+    each(
+        &mut out,
+        kind::SCHEMA_UNEXPANDABLE_URI,
+        unexpandable_declared_uris(schema),
+        |u| u.message(),
     );
-    out.extend(
-        colliding_slot_definitions(schema)
-            .iter()
-            .map(|c| c.message()),
+    each(
+        &mut out,
+        kind::SCHEMA_SPECIALIZATION_WITHOUT_PARENT,
+        unchecked_specializations(schema),
+        |u| u.message(),
     );
-    out.extend(colliding_element_iris(schema).iter().map(|c| c.message()));
-    out.extend(untyped_slots(schema).iter().map(|u| u.message()));
-    out.extend(
-        unmodeled_annotation_nesting(schema)
-            .iter()
-            .map(|u| u.message()),
+    each(
+        &mut out,
+        kind::SCHEMA_PROPERTY_IRI_COLLISION,
+        colliding_slot_definitions(schema),
+        |c| c.message(),
     );
-    out.extend(
-        opaque_panschema_annotations(schema)
-            .iter()
-            .map(|o| o.message()),
+    each(
+        &mut out,
+        kind::SCHEMA_CLASS_IRI_COLLISION,
+        colliding_element_iris(schema),
+        |c| c.message(),
+    );
+    each(
+        &mut out,
+        kind::SCHEMA_UNTYPED_SLOT,
+        untyped_slots(schema),
+        |u| u.message(),
+    );
+    each(
+        &mut out,
+        kind::SCHEMA_UNMODELED_ANNOTATION_NESTING,
+        unmodeled_annotation_nesting(schema),
+        |u| u.message(),
+    );
+    each(
+        &mut out,
+        kind::SCHEMA_UNKNOWN_PANSCHEMA_ANNOTATION,
+        opaque_panschema_annotations(schema),
+        |o| o.message(),
     );
     for family in SLOT_SEMANTICS_FAMILIES {
-        out.extend((family.issues)(schema));
+        each(
+            &mut out,
+            family.invalid_declaration_kind,
+            (family.issues)(schema),
+            |message| message,
+        );
     }
-    out.extend(impossible_rule_values(schema).iter().map(|i| i.message()));
+    each(
+        &mut out,
+        kind::SCHEMA_IMPOSSIBLE_RULE_VALUE,
+        impossible_rule_values(schema),
+        |i| i.message(),
+    );
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
     // to — but the deviation from that "should" is stated, because upstream
@@ -777,16 +847,19 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
         .map(|(name, _)| name)
         .collect();
     if roots.len() > 1 {
-        out.push(format!(
-            "schema declares {} `tree_root` classes ({}); the LinkML metamodel \
+        out.push(SchemaWarning::new(
+            kind::SCHEMA_MULTIPLE_TREE_ROOTS,
+            format!(
+                "schema declares {} `tree_root` classes ({}); the LinkML metamodel \
              recommends at most one — panschema reads each dataset against the \
              root it conforms to, but other LinkML tooling may not",
-            roots.len(),
-            roots
-                .iter()
-                .map(|r| format!("`{r}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
+                roots.len(),
+                roots
+                    .iter()
+                    .map(|r| format!("`{r}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         ));
     }
     out
@@ -1701,6 +1774,8 @@ pub struct SlotSemanticsFamily {
     pub noun: &'static str,
     pub annotation: &'static str,
     pub issues: fn(&SchemaDefinition) -> Vec<String>,
+    /// The kind of the load warning each of `issues` is reported as.
+    pub invalid_declaration_kind: &'static str,
     /// How the family's claims are checked against sibling graphs —
     /// `None` for a family the manifest's `resolve_against` does not gate.
     pub sibling_check: Option<SiblingCheck>,
@@ -1728,6 +1803,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
+        invalid_declaration_kind: kind::ABSENCE_CLAIM_INVALID_DECLARATION,
         sibling_check: Some(SiblingCheck {
             declared: |schema| absence_bindings(schema).len(),
             stated: |schema, set| {
@@ -1745,6 +1821,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
+        invalid_declaration_kind: kind::ANCHOR_EXPANSION_INVALID_DECLARATION,
         sibling_check: None,
     },
     SlotSemanticsFamily {
@@ -1756,6 +1833,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
+        invalid_declaration_kind: kind::VERSION_PIN_INVALID_DECLARATION,
         sibling_check: Some(SiblingCheck {
             declared: |schema| version_bindings(schema).len(),
             stated: |schema, set| version_pins(set, &version_bindings(schema), &[]).read(),
@@ -1771,6 +1849,7 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
                 .map(|i| i.message())
                 .collect()
         },
+        invalid_declaration_kind: kind::VALUE_CLAIM_INVALID_DECLARATION,
         sibling_check: Some(SiblingCheck {
             declared: |schema| value_claim_bindings(schema).len(),
             stated: |schema, set| {
@@ -3276,6 +3355,7 @@ pub fn expansion_declarations(
 /// Every schema finding `--strict` refuses, counted in one place — the
 /// list both the generate gate and the validate gate consume, so the
 /// two verbs can never drift on what blocks a strict run.
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct StrictBlocking {
     pub unmodeled: usize,
     pub dangling: usize,
@@ -3288,6 +3368,27 @@ pub struct StrictBlocking {
 }
 
 impl StrictBlocking {
+    /// The count a load warning of `kind` adds to, for a kind `--strict`
+    /// refuses; `None` for every other kind.
+    fn count_of(&mut self, kind: &str) -> Option<&mut usize> {
+        Some(match kind {
+            kind::SCHEMA_UNMODELED_CONSTRUCT => &mut self.unmodeled,
+            kind::SCHEMA_DANGLING_REFERENCE => &mut self.dangling,
+            kind::SCHEMA_PROPERTY_IRI_COLLISION | kind::SCHEMA_CLASS_IRI_COLLISION => {
+                &mut self.colliding
+            }
+            kind::SCHEMA_UNTYPED_SLOT => &mut self.untyped,
+            kind::SCHEMA_IMPOSSIBLE_RULE_VALUE => &mut self.impossible,
+            _ if SLOT_SEMANTICS_FAMILIES
+                .iter()
+                .any(|family| family.invalid_declaration_kind == kind) =>
+            {
+                &mut self.slot_semantics
+            }
+            _ => return None,
+        })
+    }
+
     pub fn total(&self) -> usize {
         self.unmodeled
             + self.dangling
@@ -3298,19 +3399,16 @@ impl StrictBlocking {
     }
 }
 
-/// Count every strict-blocking schema finding.
+/// Count every strict-blocking schema finding: each load warning whose
+/// kind `--strict` refuses.
 pub fn strict_blocking(schema: &SchemaDefinition) -> StrictBlocking {
-    StrictBlocking {
-        unmodeled: unmodeled_class_constructs(schema).len(),
-        dangling: dangling_references(schema).len(),
-        colliding: colliding_slot_definitions(schema).len() + colliding_element_iris(schema).len(),
-        untyped: untyped_slots(schema).len(),
-        impossible: impossible_rule_values(schema).len(),
-        slot_semantics: SLOT_SEMANTICS_FAMILIES
-            .iter()
-            .map(|family| (family.issues)(schema).len())
-            .sum(),
+    let mut blocking = StrictBlocking::default();
+    for warning in schema_load_diagnostics(schema) {
+        if let Some(count) = blocking.count_of(warning.kind) {
+            *count += 1;
+        }
     }
+    blocking
 }
 
 /// The declarations alone — the loader's half of
@@ -4064,6 +4162,14 @@ mod tests {
             findings.iter().map(|f| f.message()).collect::<Vec<_>>()
         );
         assert!(findings[0].message().contains("aproved"));
+        assert_eq!(
+            schema_load_diagnostics(&schema),
+            [SchemaWarning::new(
+                kind::SCHEMA_IMPOSSIBLE_RULE_VALUE,
+                findings[0].message()
+            )],
+            "the load reports it as an impossible rule value"
+        );
     }
 
     #[test]
@@ -4334,6 +4440,14 @@ mod tests {
             "the message should state the RDF consequence; got: {}",
             c.message()
         );
+        let load = schema_load_diagnostics(&schema);
+        assert!(
+            load.contains(&SchemaWarning::new(
+                kind::SCHEMA_PROPERTY_IRI_COLLISION,
+                c.message()
+            )),
+            "the load reports it as a property-IRI collision; got: {load:?}"
+        );
     }
 
     /// A top-level slot listed by several classes via `slots:` is one slot —
@@ -4432,8 +4546,9 @@ enums:
         let load = super::schema_load_diagnostics(&schema);
         assert!(
             load.iter()
-                .any(|m| m.contains("<https://example.org/s/Status>")),
-            "the warning names the shared IRI; got: {load:?}"
+                .any(|m| m.kind == kind::SCHEMA_CLASS_IRI_COLLISION
+                    && m.message.contains("<https://example.org/s/Status>")),
+            "a class-IRI collision names the shared IRI; got: {load:?}"
         );
     }
 
@@ -4722,11 +4837,15 @@ classes:
         ));
         let msgs = schema_load_diagnostics(&schema);
         assert!(
-            msgs.iter().any(|m| m.contains(UNKNOWN_KEY)),
+            msgs.iter()
+                .any(|m| m.kind == kind::SCHEMA_UNMODELED_CONSTRUCT
+                    && m.message.contains(UNKNOWN_KEY)),
             "expected an unmodeled-construct message; got: {msgs:?}"
         );
         assert!(
-            msgs.iter().any(|m| m.contains("missing")),
+            msgs.iter()
+                .any(|m| m.kind == kind::SCHEMA_UNIQUE_KEY_NAMES_NO_SLOT
+                    && m.message.contains("missing")),
             "expected an unresolved unique-key-slot message; got: {msgs:?}"
         );
     }
@@ -4774,6 +4893,14 @@ classes:
             found[0].message(),
             "class `Partial` uses slot `citations`, which specializes `anchors`, without \
              the parent slot — the subset is not validated for its records"
+        );
+        let load = schema_load_diagnostics(&schema);
+        assert!(
+            load.contains(&SchemaWarning::new(
+                kind::SCHEMA_SPECIALIZATION_WITHOUT_PARENT,
+                found[0].message()
+            )),
+            "the load reports it as a specialization without its parent; got: {load:?}"
         );
     }
 
@@ -4964,7 +5091,10 @@ classes:
         assert!(
             messages
                 .iter()
-                .any(|m| m.contains("`note`") && m.contains("slot `s1`") && m.contains("dropped")),
+                .any(|m| m.kind == kind::SCHEMA_UNMODELED_ANNOTATION_NESTING
+                    && m.message.contains("`note`")
+                    && m.message.contains("slot `s1`")
+                    && m.message.contains("dropped")),
             "the load diagnostics carry the warning; got: {messages:?}"
         );
     }
@@ -4993,7 +5123,9 @@ classes:
         assert!(
             messages
                 .iter()
-                .any(|m| m.contains("`panschema:label`") && m.contains("ignores")),
+                .any(|m| m.kind == kind::SCHEMA_UNKNOWN_PANSCHEMA_ANNOTATION
+                    && m.message.contains("`panschema:label`")
+                    && m.message.contains("ignores")),
             "the load diagnostics carry the warning; got: {messages:?}"
         );
     }
@@ -5031,7 +5163,7 @@ classes:
         assert!(
             schema_load_diagnostics(&schema)
                 .iter()
-                .any(|m| m.contains("slot `note`")),
+                .any(|m| m.kind == kind::SCHEMA_UNTYPED_SLOT && m.message.contains("slot `note`")),
             "the shared load path surfaces it for every command"
         );
     }
@@ -5397,12 +5529,12 @@ classes:
             schema.classes.insert(name.to_string(), class);
         }
         let warnings = schema_load_diagnostics(&schema);
-        let root_warnings: Vec<&String> = warnings
+        let root_warnings: Vec<&SchemaWarning> = warnings
             .iter()
-            .filter(|w| w.contains("tree_root"))
+            .filter(|w| w.kind == kind::SCHEMA_MULTIPLE_TREE_ROOTS)
             .collect();
         assert_eq!(root_warnings.len(), 1, "one warning, not one per root");
-        let msg = root_warnings[0];
+        let msg = &root_warnings[0].message;
         assert!(
             msg.contains("Enterprise")
                 && msg.contains("ProviderCatalog")
@@ -5420,7 +5552,7 @@ classes:
         assert!(
             !schema_load_diagnostics(&schema)
                 .iter()
-                .any(|w| w.contains("tree_root")),
+                .any(|w| w.kind == kind::SCHEMA_MULTIPLE_TREE_ROOTS),
             "one root is the recommended shape; nothing to say"
         );
     }
@@ -6394,8 +6526,9 @@ classes:
                 .copied()
                 .filter(|kind| {
                     !kind.starts_with("conformance/")
+                        && !kind.starts_with("schema/")
+                        && !kind.ends_with("/invalid-declaration")
                         && ![
-                            crate::findings::kind::SCHEMA_LOAD_WARNING,
                             crate::findings::kind::CHECK_NO_RESOLVE_AGAINST,
                             crate::findings::kind::CHECK_SIBLING_DECLARES_NO_DATASETS,
                         ]
@@ -6403,7 +6536,8 @@ classes:
                 })
                 .collect(),
             "the findings here and each family's unchecked kind are every listed kind outside \
-             conformance and the command's own schema and check notes, each once"
+             conformance, the schema's load warnings, and the command's own check notes, each \
+             once"
         );
     }
 
@@ -7052,7 +7186,10 @@ classes:
         );
         let messages = schema_load_diagnostics(&schema);
         assert!(
-            messages.iter().any(|m| m.contains("asserts_absence")),
+            messages
+                .iter()
+                .any(|m| m.kind == kind::ABSENCE_CLAIM_INVALID_DECLARATION
+                    && m.message.contains("asserts_absence")),
             "the load diagnostics carry the warnings; got: {messages:?}"
         );
         assert_eq!(
@@ -7306,6 +7443,151 @@ classes:
         );
     }
 
+    /// Every schema-load kind the kind list names is one a load emits: the
+    /// diagnostics' kinds here, each from a schema that raises it, and the
+    /// loader's own (a reader's drop, an override, a released
+    /// identifier-key pair, no `tree_root`) in the loader's tests.
+    #[test]
+    fn every_listed_schema_load_kind_is_raised_by_some_schema() {
+        let families = "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor, \
+             pinned, claims]\nslots:\n  anchor:\n    range: uri\n    annotations:\n      \
+             expand_against: anchor\n  pinned:\n    range: string\n    annotations:\n      \
+             records_version_of:\n        value:\n          sibling_slot: pinned\n  claims:\n    \
+             range: string\n    annotations:\n      asserts_value:\n        value: null\n  \
+             orphan:\n    range: uri\n    annotations:\n      asserts_absence:\n        value: \
+             null\n";
+        let unmodeled = format!("name: s\nclasses:\n  C:\n    {UNKNOWN_KEY}: []\n");
+        let raising: &[(&str, &str)] = &[
+            (kind::SCHEMA_UNMODELED_CONSTRUCT, &unmodeled),
+            (
+                kind::SCHEMA_UNIQUE_KEY_NAMES_NO_SLOT,
+                "name: s\nclasses:\n  Keyed:\n    unique_keys:\n      k:\n        \
+                 unique_key_slots: [missing]\n",
+            ),
+            (
+                kind::SCHEMA_DANGLING_REFERENCE,
+                "name: s\nclasses:\n  C:\n    attributes:\n      a:\n        range: Nowhere\n",
+            ),
+            (
+                kind::SCHEMA_UNEXPANDABLE_URI,
+                "name: s\nprefixes:\n  ex: https://example.org/\nclasses:\n  Widget:\n    \
+                 class_uri: undeclared:Widget\n",
+            ),
+            (
+                kind::SCHEMA_SPECIALIZATION_WITHOUT_PARENT,
+                "name: s\nslots:\n  anchors: {}\n  citations:\n    is_a: anchors\n\
+                 classes:\n  Partial:\n    slots: [citations]\n",
+            ),
+            (
+                kind::SCHEMA_PROPERTY_IRI_COLLISION,
+                "name: s\nclasses:\n  Recipe:\n    attributes:\n      id:\n        range: \
+                 string\n  Image:\n    attributes:\n      id:\n        range: string\n",
+            ),
+            (
+                kind::SCHEMA_CLASS_IRI_COLLISION,
+                "name: s\nprefixes:\n  ex: https://example.org/s/\ndefault_prefix: ex\n\
+                 classes:\n  status: {}\nenums:\n  Status: {}\n",
+            ),
+            (kind::SCHEMA_UNTYPED_SLOT, "name: s\nslots:\n  note: {}\n"),
+            (
+                kind::SCHEMA_UNMODELED_ANNOTATION_NESTING,
+                "name: t\nslots:\n  s1:\n    annotations:\n      note:\n        value: hello\n\
+                 \x20       annotations:\n          provenance: curated\n",
+            ),
+            (
+                kind::SCHEMA_UNKNOWN_PANSCHEMA_ANNOTATION,
+                "name: t\nclasses:\n  C:\n    annotations:\n      panschema:label:\n        \
+                 value:\n          en: Human\n",
+            ),
+            (
+                kind::SCHEMA_IMPOSSIBLE_RULE_VALUE,
+                "name: s\nenums:\n  Verdict:\n    permissible_values:\n      approved: {}\n\
+                 classes:\n  Answer:\n    attributes:\n      verdict:\n        range: Verdict\n\
+                 \x20   rules:\n      - preconditions:\n          slot_conditions:\n            \
+                 verdict:\n              equals_string: aproved\n",
+            ),
+            (
+                kind::SCHEMA_MULTIPLE_TREE_ROOTS,
+                "name: s\nclasses:\n  A:\n    tree_root: true\n  B:\n    tree_root: true\n",
+            ),
+            (kind::ABSENCE_CLAIM_INVALID_DECLARATION, families),
+            (kind::ANCHOR_EXPANSION_INVALID_DECLARATION, families),
+            (kind::VERSION_PIN_INVALID_DECLARATION, families),
+            (kind::VALUE_CLAIM_INVALID_DECLARATION, families),
+        ];
+        for (expected, yaml) in raising {
+            let load = schema_load_diagnostics(&parse(yaml));
+            assert!(
+                load.iter().any(|warning| warning.kind == *expected),
+                "a schema raising `{expected}` is reported under it; got: {load:?}"
+            );
+        }
+        let loaders = [
+            kind::SCHEMA_CONSTRUCT_DROPPED,
+            kind::SCHEMA_ROOT_OVERRIDES_IMPORT,
+            kind::SCHEMA_IDENTIFIER_KEY_CONFLICT,
+            kind::SCHEMA_NO_TREE_ROOT,
+        ];
+        assert_eq!(
+            raising
+                .iter()
+                .map(|(kind, _)| *kind)
+                .chain(loaders)
+                .collect::<BTreeSet<_>>(),
+            kind::ALL
+                .iter()
+                .copied()
+                .filter(|kind| kind.starts_with("schema/") || kind.ends_with("/invalid-declaration"))
+                .collect(),
+            "every listed schema-load kind is raised here or by the loader"
+        );
+    }
+
+    /// The schema defects `--strict` refuses, each counted under its own
+    /// category of the strict gate.
+    #[test]
+    fn strict_counts_each_refused_kind_once_under_its_category_and_no_other_kind() {
+        let mut blocking = StrictBlocking::default();
+        let mut refused = BTreeSet::new();
+        for kind in kind::ALL {
+            if let Some(count) = blocking.count_of(kind) {
+                *count += 1;
+                refused.insert(*kind);
+            }
+            assert_eq!(
+                refused_under_strict(kind),
+                refused.contains(kind),
+                "`{kind}` is refused exactly when it is counted"
+            );
+        }
+        assert_eq!(
+            refused,
+            BTreeSet::from([
+                kind::SCHEMA_UNMODELED_CONSTRUCT,
+                kind::SCHEMA_DANGLING_REFERENCE,
+                kind::SCHEMA_PROPERTY_IRI_COLLISION,
+                kind::SCHEMA_CLASS_IRI_COLLISION,
+                kind::SCHEMA_UNTYPED_SLOT,
+                kind::SCHEMA_IMPOSSIBLE_RULE_VALUE,
+                kind::ABSENCE_CLAIM_INVALID_DECLARATION,
+                kind::ANCHOR_EXPANSION_INVALID_DECLARATION,
+                kind::VERSION_PIN_INVALID_DECLARATION,
+                kind::VALUE_CLAIM_INVALID_DECLARATION,
+            ])
+        );
+        assert_eq!(
+            blocking,
+            StrictBlocking {
+                unmodeled: 1,
+                dangling: 1,
+                colliding: 2,
+                untyped: 1,
+                impossible: 1,
+                slot_semantics: SLOT_SEMANTICS_FAMILIES.len(),
+            }
+        );
+    }
+
     /// The strict gate's arithmetic is exact: every family contributes
     /// its own count to the total, and the slot-semantics count is the
     /// sum of every declaration family.
@@ -7340,10 +7622,18 @@ classes:
             "one defect from each declaration family, summed"
         );
         let load = schema_load_diagnostics(&schema);
-        for family in SLOT_SEMANTICS_FAMILIES.iter().map(|f| f.annotation) {
+        for (annotation, family_kind) in [
+            ("asserts_absence", "absence-claim/invalid-declaration"),
+            ("expand_against", "anchor-expansion/invalid-declaration"),
+            ("records_version_of", "version-pin/invalid-declaration"),
+            ("asserts_value", "value-claim/invalid-declaration"),
+        ] {
             assert!(
-                load.iter().any(|m| m.contains(family)),
-                "a defective `{family}` declaration is a load warning; got: {load:?}"
+                load.iter().any(|m| m.kind == family_kind
+                    && refused_under_strict(m.kind)
+                    && m.message.contains(annotation)),
+                "a defective `{annotation}` declaration is a `{family_kind}` load warning, \
+                 which --strict refuses; got: {load:?}"
             );
         }
     }
@@ -7557,7 +7847,10 @@ classes:
         );
         let messages = schema_load_diagnostics(&schema);
         assert!(
-            messages.iter().any(|m| m.contains("expand_against")),
+            messages
+                .iter()
+                .any(|m| m.kind == kind::ANCHOR_EXPANSION_INVALID_DECLARATION
+                    && m.message.contains("expand_against")),
             "the load diagnostics carry the warnings; got: {messages:?}"
         );
     }
@@ -8717,7 +9010,10 @@ classes:
         let messages = schema_load_diagnostics(&schema);
         for finding in &found {
             assert!(
-                messages.contains(&finding.message()),
+                messages.contains(&SchemaWarning::new(
+                    kind::SCHEMA_UNEXPANDABLE_URI,
+                    finding.message()
+                )),
                 "the load diagnostics carry {:?}",
                 finding.message()
             );

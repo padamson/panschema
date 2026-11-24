@@ -132,13 +132,18 @@ against the exit code as invoked (a violation in the per-file form;
 under `--strict`, anything bare `verify` or `--entry` would otherwise
 report as a `warning`), `warning` when it is reported without failing,
 `note` when it is informational. A note stays a `note` under `--strict`,
-which never fails on one. A `schema/load-warning` is a `warning` even
-where bare `verify --strict` fails on it. Match on `kind`, never on
-`message`, whose wording can change. A reader that stops reading stdout
-early (`| head -1`, `| grep -q`) does not change the exit code. A schema's load warnings are reported each time it loads, under
-the entry being checked, so a sibling's repeat under each entry that
-resolves against it. The note on references that leave a dataset stays on
-stderr. Every kind:
+which never fails on one. A schema load warning is an `error` only under
+bare `verify --strict`, and only for a defect `--strict` refuses (the
+first schema row below); checking data with `--entry` or `--schema`, every
+one is a `warning`. Its `file` is the schema file it came from: the import
+a reader dropped a construct from or whose definition the root overrode,
+and otherwise the root schema. Match on `kind`, never on `message`, whose
+wording can change. A reader that stops reading stdout early (`| head -1`,
+`| grep -q`) does not change the exit code. A schema's load warnings are
+reported each time it loads, under the entry being checked, so a
+sibling's repeat under each entry that resolves against it, always at
+`warning`: its own entry is the one they count against. The note on
+references that leave a dataset stays on stderr. Every kind:
 
 | Finding | Kinds |
 |---|---|
@@ -148,7 +153,8 @@ stderr. Every kind:
 | A `records_version_of` pin | `version-pin/mismatched`, `version-pin/uncheckable`, `version-pin/unchecked` |
 | An `asserts_value` claim | `value-claim/differs`, `value-claim/unset`, `value-claim/slot-not-carried`, `value-claim/not-among`, `value-claim/uncheckable`, `value-claim/unchecked` |
 | Datasets that overlap (a note) | `dataset/iri-collision`, `dataset/unintended-split` |
-| A schema load warning: every one, for now | `schema/load-warning` |
+| A schema defect bare `verify --strict` refuses | `schema/unmodeled-construct`, `schema/dangling-reference`, `schema/property-iri-collision`, `schema/class-iri-collision`, `schema/untyped-slot`, `schema/impossible-rule-value`, `absence-claim/invalid-declaration`, `anchor-expansion/invalid-declaration`, `version-pin/invalid-declaration`, `value-claim/invalid-declaration` |
+| Any other schema load warning | `schema/construct-dropped`, `schema/root-overrides-import`, `schema/identifier-key-conflict`, `schema/unique-key-names-no-slot`, `schema/unexpandable-uri`, `schema/specialization-without-parent`, `schema/unmodeled-annotation-nesting`, `schema/unknown-panschema-annotation`, `schema/multiple-tree-roots`, and `schema/no-tree-root` (from `panschema-model`'s `load_dataset` only) |
 | The entry's `[check.<name>]` policy (a note) | `check/no-resolve-against`, `check/sibling-declares-no-datasets` |
 
 ## `migrate` and the runner's rules

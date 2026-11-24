@@ -141,6 +141,30 @@ fn every_finding_kind_is_documented() {
 }
 
 #[test]
+fn the_refused_schema_defects_row_lists_exactly_the_kinds_strict_refuses() {
+    let doc = skill_ref("cli.md");
+    let row = doc
+        .lines()
+        .find(|line| line.starts_with("| A schema defect bare `verify --strict` refuses |"))
+        .expect("the CLI reference has a row of the schema defects --strict refuses");
+    let listed: std::collections::BTreeSet<&str> = row
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|token| token.contains('/'))
+        .collect();
+    let refused: std::collections::BTreeSet<&str> = panschema::findings::kind::ALL
+        .iter()
+        .copied()
+        .filter(|kind| panschema::diagnostics::refused_under_strict(kind))
+        .collect();
+    assert_eq!(
+        listed, refused,
+        "the row says which schema load warnings fail bare `verify --strict`"
+    );
+}
+
+#[test]
 fn every_generate_manifest_key_is_documented() {
     let doc = skill_ref("manifest.md");
     // The serialized field names are the source of truth for what a manifest

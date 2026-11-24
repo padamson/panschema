@@ -8,7 +8,8 @@
 use std::path::Path;
 
 use panschema_model::diagnostics::{SLOT_SEMANTICS_FAMILIES, schema_load_diagnostics};
-use panschema_model::import_resolve::load_schema;
+use panschema_model::findings::kind;
+use panschema_model::import_resolve::{LoadWarning, load_schema};
 use panschema_model::instances::instance_iri_string;
 use panschema_model::io::Reader;
 use panschema_model::linkml_resolve::resolve_effective_slots;
@@ -57,14 +58,24 @@ fn load_warnings_are_returned_as_values_and_are_the_load_diagnostics() {
     )
     .expect("a schema with a dangling range still loads");
     assert!(
-        loaded.warnings.iter().any(|w| w.contains("Customer")),
-        "the dangling range is reported by name; got {:?}",
+        loaded.warnings.iter().any(|w| {
+            w.kind == kind::SCHEMA_DANGLING_REFERENCE && w.message.contains("Customer")
+        }),
+        "the dangling range is reported by kind and name; got {:?}",
         loaded.warnings
     );
     assert_eq!(
         loaded.warnings,
-        schema_load_diagnostics(&loaded.schema),
-        "the warnings a load returns are exactly the schema's load diagnostics"
+        schema_load_diagnostics(&loaded.schema)
+            .into_iter()
+            .map(|warning| LoadWarning::new(
+                "tests/fixtures/dangling_range.yaml",
+                warning.kind,
+                warning.message
+            ))
+            .collect::<Vec<_>>(),
+        "the warnings a load returns are exactly the schema's load diagnostics, each \
+         naming the schema file"
     );
 }
 

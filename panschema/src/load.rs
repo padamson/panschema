@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::import_resolve::{ImportReport, LoadFailure, LoadedSchema};
+use crate::import_resolve::{ImportReport, LoadFailure, LoadWarning, LoadedSchema};
 use crate::io::{IoResult, ReaderLookup};
 use crate::linkml::SchemaDefinition;
-use crate::report::{Effect, File, Reporter, Text};
+use crate::report::{Effect, Reporter};
 
 /// Load a schema with its local imports resolved, printing each load
 /// warning to stderr the way every command reports them.
@@ -46,27 +46,19 @@ pub fn load_schema_with_report(
 }
 
 /// [`load_schema_with_deps`], reporting each load warning through
-/// `reporter` as a finding about `input` that warns without failing the run.
+/// `reporter` as a finding about the schema file it came from, a warning
+/// `--strict` refuses with the effect `refused`.
 pub fn load_schema_reported(
     input: &Path,
     registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
+    refused: Effect,
     reporter: &mut Reporter,
 ) -> anyhow::Result<SchemaDefinition> {
     let (warnings, outcome) = split(crate::import_resolve::load_schema_with_deps(
         input, registry, deps,
     ));
-    let file = input.display().to_string();
-    for message in warnings {
-        reporter.finding(
-            Effect::Warns,
-            File::Unnamed(&file),
-            &Text {
-                kind: crate::findings::kind::SCHEMA_LOAD_WARNING,
-                message,
-            },
-        )?;
-    }
+    reporter.load_warnings(refused, &warnings)?;
     outcome.map_err(|e| anyhow::anyhow!("{e}"))
 }
 
@@ -85,7 +77,9 @@ pub(crate) fn report(
 
 /// A load's warnings, raised whether it succeeded or failed, and its schema
 /// or its error.
-fn split(loaded: Result<LoadedSchema, LoadFailure>) -> (Vec<String>, IoResult<SchemaDefinition>) {
+fn split(
+    loaded: Result<LoadedSchema, LoadFailure>,
+) -> (Vec<LoadWarning>, IoResult<SchemaDefinition>) {
     match loaded {
         Ok(loaded) => (loaded.warnings, Ok(loaded.schema)),
         Err(failure) => (failure.warnings, Err(failure.error)),
@@ -144,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reported_load_names_each_warning_as_a_load_warning_about_the_schema_file() {
+    fn a_reported_load_names_each_warning_by_its_kind_and_the_schema_file() {
         use crate::report::{MessageFormat, Reporter};
         let registry = FormatRegistry::with_defaults();
         let tmp = tempfile::tempdir().unwrap();
@@ -158,7 +152,13 @@ mod tests {
         let schema = {
             let mut reporter =
                 Reporter::to(MessageFormat::Json, true, std::io::sink(), &mut stdout);
-            load_schema_reported(&path, &registry, &BTreeMap::new(), &mut reporter)
+            load_schema_reported(
+                &path,
+                &registry,
+                &BTreeMap::new(),
+                Effect::Warns,
+                &mut reporter,
+            )
         }
         .expect("the schema loads");
         assert!(
@@ -172,7 +172,7 @@ mod tests {
             .collect();
         assert_eq!(lines.len(), 1, "one warning, one finding: {lines:?}");
         let finding = &lines[0];
-        assert_eq!(finding["kind"], "schema/load-warning", "{finding}");
+        assert_eq!(finding["kind"], "schema/unmodeled-construct", "{finding}");
         assert_eq!(finding["level"], "warning", "{finding}");
         assert_eq!(finding["place"], serde_json::Value::Null, "{finding}");
         assert_eq!(finding["file"], path.display().to_string(), "{finding}");
@@ -214,15 +214,27 @@ mod tests {
                 &dir.join("root.yaml"),
                 &registry,
                 &BTreeMap::new(),
+                Effect::Warns,
                 &mut reporter,
             )
         };
         let err = outcome.expect_err("two imports defining `Crate` differently do not load");
         assert!(err.to_string().contains("`Crate`"), "{err}");
         let stdout = String::from_utf8(stdout).unwrap();
+        let lines: Vec<serde_json::Value> = stdout
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
         assert!(
-            stdout.contains("\"kind\":\"schema/load-warning\"") && stdout.contains("`Parcel`"),
-            "the warning raised before the failure is still reported; got:\n{stdout}"
+            lines
+                .iter()
+                .any(|line| line["kind"] == "schema/root-overrides-import"
+                    && line["file"] == dir.join("a.yaml").display().to_string()
+                    && line["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("`Parcel`"))),
+            "the override raised before the failure is still reported, about the import \
+             whose definition was dropped; got:\n{stdout}"
         );
     }
 

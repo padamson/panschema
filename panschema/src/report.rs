@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use serde::Serialize;
 
 use crate::findings::Finding;
+use crate::import_resolve::LoadWarning;
 
 /// How a run reports its findings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -88,9 +89,8 @@ impl<'a> File<'a> {
     }
 }
 
-/// A finding the command words itself: a schema load warning, a note on
-/// the `[check.<name>]` policy, or a claim family's count with the reason
-/// it went unchecked.
+/// A finding the command words itself: a note on the `[check.<name>]`
+/// policy, or a claim family's count with the reason it went unchecked.
 pub struct Text {
     pub kind: &'static str,
     pub message: String,
@@ -225,6 +225,24 @@ impl<'w> Reporter<'w> {
             findings: 0,
             summaries: Vec::new(),
         }
+    }
+
+    /// Report a schema load's warnings, each about the file it came from:
+    /// one `--strict` refuses with the effect `refused` (fails under
+    /// `--strict` for bare `verify`, which checks the schema; warns for a
+    /// form that checks data, or a sibling whose own entry counts it), and
+    /// every other one as a warning.
+    pub fn load_warnings(&mut self, refused: Effect, warnings: &[LoadWarning]) -> io::Result<()> {
+        for warning in warnings {
+            let effect = if warning.refused_under_strict() {
+                refused
+            } else {
+                Effect::Warns
+            };
+            let file = warning.file.display().to_string();
+            self.finding(effect, File::Unnamed(&file), warning)?;
+        }
+        Ok(())
     }
 
     /// The manifest entry the findings that follow belong to.
@@ -450,6 +468,52 @@ mod tests {
                        "message": "q1 names nothing"}),
             ]
         );
+    }
+
+    #[test]
+    fn a_schema_defect_strict_refuses_fails_only_a_strict_run_that_refuses_it() {
+        let warnings = [
+            LoadWarning::new("s.yaml", kind::SCHEMA_DANGLING_REFERENCE, "range `Nowhere`"),
+            LoadWarning::new("i.yaml", kind::SCHEMA_MULTIPLE_TREE_ROOTS, "two roots"),
+        ];
+        for (strict, refused, dangling) in [
+            (false, Effect::Warns, "warning"),
+            (true, Effect::Warns, "warning"),
+            (false, Effect::FailsUnderStrict, "warning"),
+            (true, Effect::FailsUnderStrict, "error"),
+        ] {
+            let (stderr, stdout) = run(MessageFormat::Json, strict, |r| {
+                r.load_warnings(refused, &warnings)
+            });
+            assert_eq!(
+                stderr, "warning: range `Nowhere`\nwarning: two roots\n",
+                "the human lines are the same however the run treats them"
+            );
+            assert_eq!(
+                lines(&stdout)
+                    .iter()
+                    .map(
+                        |line| [&line["kind"], &line["level"], &line["file"], &line["place"]]
+                            .map(Value::clone)
+                    )
+                    .collect::<Vec<_>>(),
+                [
+                    [
+                        json!("schema/dangling-reference"),
+                        json!(dangling),
+                        json!("s.yaml"),
+                        Value::Null
+                    ],
+                    [
+                        json!("schema/multiple-tree-roots"),
+                        json!("warning"),
+                        json!("i.yaml"),
+                        Value::Null
+                    ],
+                ],
+                "strict {strict}, a refused defect's effect {refused:?}"
+            );
+        }
     }
 
     #[test]

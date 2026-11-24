@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::findings::{Finding, kind};
 use crate::io::{IoError, ReaderLookup};
 use crate::linkml::SchemaDefinition;
 
@@ -74,7 +75,53 @@ pub fn load_schema(input: &Path, registry: &dyn ReaderLookup) -> Result<LoadedSc
 #[derive(Debug)]
 pub struct LoadedSchema {
     pub schema: SchemaDefinition,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<LoadWarning>,
+}
+
+/// A warning a load raised, and the file it came from: the file a reader
+/// dropped a construct from, the import whose definition the root
+/// overrode, and otherwise the root schema the load began at, since a
+/// diagnostic of the merged schema belongs to no one file.
+/// [`crate::load_dataset`]'s warning that a dataset read no records names
+/// the dataset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadWarning {
+    pub file: PathBuf,
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl LoadWarning {
+    pub fn new(file: impl Into<PathBuf>, kind: &'static str, message: impl Into<String>) -> Self {
+        LoadWarning {
+            file: file.into(),
+            kind,
+            message: message.into(),
+        }
+    }
+
+    /// Whether `--strict` refuses a schema that raises this warning.
+    pub fn refused_under_strict(&self) -> bool {
+        crate::diagnostics::refused_under_strict(self.kind)
+    }
+}
+
+impl Finding for LoadWarning {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+    fn place(&self) -> Option<&str> {
+        None
+    }
+    fn message(&self) -> String {
+        self.message.clone()
+    }
+}
+
+impl std::fmt::Display for LoadWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
 }
 
 /// A load that failed after raising warnings. The warnings describe what
@@ -82,7 +129,7 @@ pub struct LoadedSchema {
 /// error just as it would have on success.
 #[derive(Debug)]
 pub struct LoadFailure {
-    pub warnings: Vec<String>,
+    pub warnings: Vec<LoadWarning>,
     pub error: IoError,
 }
 
@@ -165,7 +212,10 @@ fn load_with(
     let (mut schema, reader_warnings) = reader.read_with_warnings(input)?;
     // Read-time drops — constructs the IR cannot hold — surface with the
     // other load warnings rather than vanishing.
-    let mut warnings: Vec<String> = reader_warnings;
+    let mut warnings: Vec<LoadWarning> = reader_warnings
+        .into_iter()
+        .map(|warning| LoadWarning::new(input, kind::SCHEMA_CONSTRUCT_DROPPED, warning))
+        .collect();
     // Slot inheritance first — an inherited explicit range beats the
     // default — then the root's `default_range` fills its still-rangeless
     // slots, before any merging. Same pair runs in `resolve_into` for every
@@ -194,12 +244,16 @@ fn load_with(
         let mut conflicts = Vec::new();
         for collision in &report.collisions {
             match collision.kept_from.as_deref() {
-                None => warnings.push(format!(
-                    "{kind} `{name}` defined differently in `{dropped}` and the root \
-                     schema; keeping the root's definition",
-                    kind = collision.kind,
-                    name = collision.name,
-                    dropped = collision.dropped_from.display(),
+                None => warnings.push(LoadWarning::new(
+                    &collision.dropped_from,
+                    kind::SCHEMA_ROOT_OVERRIDES_IMPORT,
+                    format!(
+                        "{kind} `{name}` defined differently in `{dropped}` and the root \
+                         schema; keeping the root's definition",
+                        kind = collision.kind,
+                        name = collision.name,
+                        dropped = collision.dropped_from.display(),
+                    ),
                 )),
                 Some(kept) => conflicts.push(format!(
                     "conflicting definitions of {kind} `{name}`: `{kept}` and `{dropped}` define \
@@ -232,7 +286,13 @@ fn load_with(
     // After the merge, because the two flags can come from different files.
     let conflicts = crate::diagnostics::identifier_key_conflicts(&schema);
     if rules == Rules::AsReleased {
-        warnings.extend(conflicts.iter().map(|c| c.released_message()));
+        warnings.extend(conflicts.iter().map(|c| {
+            LoadWarning::new(
+                input,
+                kind::SCHEMA_IDENTIFIER_KEY_CONFLICT,
+                c.released_message(),
+            )
+        }));
     } else if !conflicts.is_empty() {
         return Err(LoadFailure {
             warnings,
@@ -249,7 +309,11 @@ fn load_with(
     // Schema-level diagnostics that don't depend on the output format, so every
     // command surfaces them. `--strict` enforcement and format-specific
     // warnings stay at the `generate` site.
-    warnings.extend(crate::diagnostics::schema_load_diagnostics(&schema));
+    warnings.extend(
+        crate::diagnostics::schema_load_diagnostics(&schema)
+            .into_iter()
+            .map(|warning| LoadWarning::new(input, warning.kind, warning.message)),
+    );
 
     Ok((LoadedSchema { schema, warnings }, report))
 }
@@ -339,9 +403,9 @@ pub struct ImportReport {
     /// remote URL), each once, in the order first met. A remote CURIE is
     /// expanded through the prefixes of the file that imports it.
     pub builtin_imports: Vec<String>,
-    /// What each imported file's reader dropped, each prefixed by the
-    /// file's path, in resolution order.
-    pub warnings: Vec<String>,
+    /// What each imported file's reader dropped, each message prefixed by
+    /// the file's path, in resolution order.
+    pub warnings: Vec<LoadWarning>,
 }
 
 /// Resolve `root.imports` in place: load each imported local file and
@@ -533,11 +597,15 @@ fn resolve_into(
                     path: resolved.clone(),
                     source,
                 })?;
-        report.warnings.extend(
-            reader_warnings
-                .iter()
-                .map(|warning| format!("{}: {warning}", resolved.display())),
-        );
+        report
+            .warnings
+            .extend(reader_warnings.iter().map(|warning| {
+                LoadWarning::new(
+                    &resolved,
+                    kind::SCHEMA_CONSTRUCT_DROPPED,
+                    format!("{}: {warning}", resolved.display()),
+                )
+            }));
         // LinkML types a rangeless slot from the root's `default_range`
         // wherever it is declared. A Turtle file declares no default and
         // keeps its properties untyped.
@@ -852,14 +920,65 @@ mod tests {
         assert_eq!(
             loaded.warnings,
             vec![
-                "dropped a construct".to_string(),
-                format!("{}: dropped a construct", import.display()),
-                format!(
-                    "class `Widget` defined differently in `{}` and the root schema; keeping \
-                     the root's definition",
-                    import.display()
+                LoadWarning::new(
+                    &root,
+                    kind::SCHEMA_CONSTRUCT_DROPPED,
+                    "dropped a construct".to_string()
                 ),
-            ]
+                LoadWarning::new(
+                    &import,
+                    kind::SCHEMA_CONSTRUCT_DROPPED,
+                    format!("{}: dropped a construct", import.display())
+                ),
+                LoadWarning::new(
+                    &import,
+                    kind::SCHEMA_ROOT_OVERRIDES_IMPORT,
+                    format!(
+                        "class `Widget` defined differently in `{}` and the root schema; \
+                         keeping the root's definition",
+                        import.display()
+                    )
+                ),
+            ],
+            "each warning names the file it came from: what a reader dropped, the file it \
+             read; an override, the import whose definition was dropped"
+        );
+    }
+
+    #[test]
+    fn a_load_warning_reports_its_kind_and_message_and_whether_strict_refuses_it() {
+        use crate::findings::Finding;
+        for (warning, refused) in [
+            (
+                LoadWarning::new("s.yaml", kind::SCHEMA_DANGLING_REFERENCE, "range `Nowhere`"),
+                true,
+            ),
+            (
+                LoadWarning::new("s.yaml", kind::SCHEMA_MULTIPLE_TREE_ROOTS, "two roots"),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                (
+                    warning.kind(),
+                    warning.place(),
+                    warning.message(),
+                    warning.to_string(),
+                    warning.refused_under_strict()
+                ),
+                (
+                    warning.kind,
+                    None,
+                    warning.message.clone(),
+                    warning.message.clone(),
+                    refused
+                ),
+                "{warning:?}"
+            );
+        }
+        assert_eq!(
+            LoadWarning::new("s.yaml", kind::SCHEMA_DANGLING_REFERENCE, "range `Nowhere`").kind(),
+            "schema/dangling-reference"
         );
     }
 
@@ -886,13 +1005,19 @@ mod tests {
             "the error names the import: {}",
             failure.error
         );
+        let import = tmp.path().join("w.yaml");
         assert_eq!(
             failure.warnings,
             vec![
-                "dropped a construct".to_string(),
-                format!(
-                    "{}: dropped a construct",
-                    tmp.path().join("w.yaml").display()
+                LoadWarning::new(
+                    &root,
+                    kind::SCHEMA_CONSTRUCT_DROPPED,
+                    "dropped a construct".to_string()
+                ),
+                LoadWarning::new(
+                    &import,
+                    kind::SCHEMA_CONSTRUCT_DROPPED,
+                    format!("{}: dropped a construct", import.display())
                 ),
             ],
             "the root's and the read import's warnings survive the failure"
@@ -951,7 +1076,10 @@ mod tests {
                 loaded
                     .warnings
                     .iter()
-                    .any(|w| w.contains("slot `id` in class `Narrowed`")),
+                    .any(|w| w.kind == kind::SCHEMA_IDENTIFIER_KEY_CONFLICT
+                        && w.file == root
+                        && !w.refused_under_strict()
+                        && w.message.contains("slot `id` in class `Narrowed`")),
                 "the pair is reported; got: {:?}",
                 loaded.warnings
             );

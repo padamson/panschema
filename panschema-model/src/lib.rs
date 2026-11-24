@@ -92,7 +92,7 @@ pub mod primitives;
 pub mod rules;
 pub mod yaml_reader;
 
-use import_resolve::{LoadFailure, LoadedSchema};
+use import_resolve::{LoadFailure, LoadWarning, LoadedSchema};
 use instances::InstanceSet;
 use io::{IoError, IoResult, ReaderLookup};
 use linkml::SchemaDefinition;
@@ -105,7 +105,7 @@ pub struct LoadedDataset {
     /// What the load reported, in the order a command prints it. Returning
     /// them is the library's whole job here; deciding where they go is the
     /// caller's.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<LoadWarning>,
 }
 
 /// Load a schema with its `imports:` resolved and read a LinkML dataset —
@@ -117,43 +117,75 @@ pub struct LoadedDataset {
 /// which is its own lookup. The dataset itself is LinkML YAML.
 ///
 /// A failure carries the warnings raised before it, so nothing a reader
-/// reported is lost to the error, and a load that reads no records warns
-/// rather than handing back an empty set as if it had succeeded. See the
-/// crate documentation for a worked example.
+/// reported is lost to the error. A load that reads no records warns
+/// rather than handing back an empty set as if it had succeeded, unless
+/// the dataset is the container with an empty collection, which holds
+/// none. See the crate documentation for a worked example.
 pub fn load_dataset(
-    schema: &Path,
+    schema_path: &Path,
     data: &Path,
     readers: &dyn ReaderLookup,
 ) -> Result<LoadedDataset, LoadFailure> {
-    let LoadedSchema { schema, warnings } = import_resolve::load_schema(schema, readers)?;
-    let read_records = || -> IoResult<InstanceSet> {
+    let LoadedSchema {
+        schema,
+        mut warnings,
+    } = import_resolve::load_schema(schema_path, readers)?;
+    let read = || -> IoResult<serde_norway::Value> {
         let text = std::fs::read_to_string(data)
             .map_err(|e| IoError::Parse(format!("could not read `{}`: {e}", data.display())))?;
-        let value: serde_norway::Value = serde_norway::from_str(&text)
-            .map_err(|e| IoError::Parse(format!("could not parse `{}`: {e}", data.display())))?;
-        Ok(InstanceSet::from_linkml_data(&schema, &value))
+        serde_norway::from_str(&text)
+            .map_err(|e| IoError::Parse(format!("could not parse `{}`: {e}", data.display())))
     };
-    let instances = match read_records() {
-        Ok(instances) => instances,
+    let value = match read() {
+        Ok(value) => value,
         Err(error) => return Err(LoadFailure { warnings, error }),
     };
+    let instances = InstanceSet::from_linkml_data(&schema, &value);
     // Records anchor on the schema's `tree_root` container, so a schema
     // without one reads nothing from any dataset, and a dataset shaped for
     // some other schema reads nothing from this one. Both come back as an
     // empty set, which is indistinguishable from success unless the load
     // says so.
-    let mut warnings = warnings;
     if !schema.classes.values().any(|class| class.tree_root) {
-        warnings.push(format!(
-            "the schema declares no `tree_root` container, so no records can be read from `{}`",
-            data.display()
+        warnings.push(LoadWarning::new(
+            schema_path,
+            findings::kind::SCHEMA_NO_TREE_ROOT,
+            format!(
+                "the schema declares no `tree_root` container, so no records can be read from \
+                 `{}`",
+                data.display()
+            ),
         ));
     } else if instances.instances.is_empty() {
-        warnings.push(format!(
-            "no records read from `{}`; its shape does not match the schema's `tree_root` \
-             container",
-            data.display()
-        ));
+        let unread = match value.as_mapping() {
+            None => Some((
+                findings::kind::DATA_NOT_A_MAPPING,
+                "it is not a mapping of the `tree_root` container's slots",
+            )),
+            // The container with an empty collection (`wines: []`) holds
+            // no records, and reading none is reading it right.
+            Some(container) => {
+                let holds_none = instances.unusable_collection_entries.is_empty()
+                    && instances
+                        .root
+                        .as_ref()
+                        .and_then(|root| schema.classes.get(root))
+                        .is_some_and(|class| {
+                            instances::names_an_empty_collection(class, &schema, container)
+                        });
+                (!holds_none).then_some((
+                    findings::kind::NO_ROOT_MATCHED,
+                    "its shape does not match the schema's `tree_root` container",
+                ))
+            }
+        };
+        if let Some((kind, why)) = unread {
+            warnings.push(LoadWarning::new(
+                data,
+                kind,
+                format!("no records read from `{}`; {why}", data.display()),
+            ));
+        }
     }
     Ok(LoadedDataset {
         schema,
@@ -208,7 +240,11 @@ mod tests {
             "the error names the dataset it could not parse: {message}"
         );
         assert!(
-            failure.warnings.iter().any(|w| w.contains("Customer")),
+            failure
+                .warnings
+                .iter()
+                .any(|w| w.kind == findings::kind::SCHEMA_DANGLING_REFERENCE
+                    && w.message.contains("Customer")),
             "the schema's own load warnings survive the failure; got {:?}",
             failure.warnings
         );
@@ -230,7 +266,9 @@ mod tests {
             no_container
                 .warnings
                 .iter()
-                .any(|w| w.contains("declares no `tree_root` container")),
+                .any(|w| w.kind == findings::kind::SCHEMA_NO_TREE_ROOT
+                    && w.file == Path::new("tests/fixtures/dangling_range.yaml")
+                    && w.message.contains("declares no `tree_root` container")),
             "the load names the missing container; got {:?}",
             no_container.warnings
         );
@@ -249,9 +287,65 @@ mod tests {
             mismatched
                 .warnings
                 .iter()
-                .any(|w| w.contains("no records read from") && w.contains("grapes.yaml")),
+                .any(|w| w.kind == findings::kind::NO_ROOT_MATCHED
+                    && w.file == data
+                    && w.message.contains("no records read from")),
             "the load names the dataset that matched nothing; got {:?}",
             mismatched.warnings
         );
+    }
+
+    /// The kinds a dataset that read no records is reported under, by what
+    /// it holds, against a container with a `title` and a `wines` collection.
+    #[test]
+    fn a_dataset_that_reads_no_records_warns_unless_it_is_the_container_holding_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let schema = dir.path().join("cellar.yaml");
+        std::fs::write(
+            &schema,
+            "name: cellar\nid: https://example.org/cellar\ndefault_range: string\nclasses:\n  \
+             Cellar:\n    tree_root: true\n    attributes:\n      title: {}\n      wines:\n        \
+             range: Wine\n        multivalued: true\n        inlined_as_list: true\n  Wine:\n    \
+             attributes:\n      id:\n        identifier: true\n",
+        )
+        .expect("write the schema");
+        let data = dir.path().join("data.yaml");
+        for (yaml, kind) in [
+            ("wines: []\n", None),
+            ("wines: {}\n", None),
+            ("wines:\n", None),
+            ("title: Reds\nwines: []\n", None),
+            ("wines: oops\n", Some(findings::kind::NO_ROOT_MATCHED)),
+            (
+                "title: Reds\ngrapes:\n  - id: zinfandel\n",
+                Some(findings::kind::NO_ROOT_MATCHED),
+            ),
+            ("title: Reds\n", Some(findings::kind::NO_ROOT_MATCHED)),
+            ("title:\n", Some(findings::kind::NO_ROOT_MATCHED)),
+            (
+                "- id: zinfandel\n",
+                Some(findings::kind::DATA_NOT_A_MAPPING),
+            ),
+            ("", Some(findings::kind::DATA_NOT_A_MAPPING)),
+        ] {
+            std::fs::write(&data, yaml).expect("write the dataset");
+            let loaded = load_dataset(&schema, &data, &YamlReader::new()).expect("the load runs");
+            assert!(
+                loaded.instances.instances.is_empty(),
+                "{yaml:?} holds no records"
+            );
+            assert_eq!(
+                loaded
+                    .warnings
+                    .iter()
+                    .map(|w| (w.kind, w.file.as_path()))
+                    .collect::<Vec<_>>(),
+                kind.map(|kind| (kind, data.as_path()))
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "{yaml:?}; got {:?}",
+                loaded.warnings
+            );
+        }
     }
 }

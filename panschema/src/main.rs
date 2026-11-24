@@ -534,8 +534,14 @@ fn check_resolve_against(
                  manifest"
             );
         };
-        let sibling_schema =
-            panschema::load::load_schema_reported(sibling_path, registry, deps, reporter)?;
+        // The sibling's own entry is the one its defects count against.
+        let sibling_schema = panschema::load::load_schema_reported(
+            sibling_path,
+            registry,
+            deps,
+            Effect::Warns,
+            reporter,
+        )?;
         if !pins.is_empty()
             && let Some(r) = resolved.get(sibling)
         {
@@ -924,11 +930,9 @@ fn generate(
     let schema =
         panschema::load::load_schema(input, &registry).map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // The unmodeled-construct, unresolved-unique-key, dangling-reference,
-    // untyped-slot, impossible-rule-value, and absence-declaration
-    // warnings are emitted by the shared load path above (so
-    // `serve`/`publish` surface them too). Under `--strict`, each is
-    // additionally a hard error here.
+    // The shared load path above prints every load warning (so
+    // `serve`/`publish` surface them too). Under `--strict`, the ones
+    // `strict_blocking` counts are additionally a hard error here.
     if strict {
         let blocking = panschema::diagnostics::strict_blocking(&schema);
         if panschema::diagnostics::should_fail_strict(strict, blocking.total()) {
@@ -2397,14 +2401,26 @@ fn verify_manifest(
     };
     let mut findings = 0usize;
     let mut problems: Vec<String> = Vec::new();
+    // Bare `verify` checks each schema, so under `--strict` a defect it
+    // refuses fails the run; `--entry` checks the named data.
+    let refused = if named.is_none() {
+        Effect::FailsUnderStrict
+    } else {
+        Effect::Warns
+    };
     let entries: Vec<&str> = match &named {
         Some((entry, _)) => vec![entry],
         None => manifest.schemas.keys().map(String::as_str).collect(),
     };
     for name in entries {
         reporter.set_entry(Some(name));
-        let schema =
-            panschema::load::load_schema_reported(&deps[name], &registry, &deps, reporter)?;
+        let schema = panschema::load::load_schema_reported(
+            &deps[name],
+            &registry,
+            &deps,
+            refused,
+            reporter,
+        )?;
         let data = match &named {
             Some((_, files)) => files.clone(),
             None => manifest.declared_instances(name, &manifest_dir, &resolved)?,
@@ -2598,6 +2614,7 @@ fn verify_data(
         schema_path,
         &registry,
         &std::collections::BTreeMap::new(),
+        Effect::Warns,
         reporter,
     )?;
 
