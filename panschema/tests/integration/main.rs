@@ -1618,6 +1618,54 @@ fn verify_command_exit_code_reflects_conformance() {
 }
 
 #[test]
+fn per_file_verify_fails_a_held_record_over_its_count_bound() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join("schema.yaml"),
+        "id: https://example.org/s\nname: s\nclasses:\n  Shelf:\n    tree_root: true\n    \
+         attributes:\n      id: {identifier: true}\n      capacity: {range: integer, \
+         annotations: {bounds_count_of: {value: {counted_slot: items}}}}\n      bins: {range: \
+         Bin, multivalued: true, inlined_as_list: true}\n  Bin:\n    attributes:\n      id: \
+         {identifier: true}\n      items: {range: string, multivalued: true}\n",
+    )
+    .expect("write schema");
+    fs::write(
+        tmp.path().join("data.yaml"),
+        "id: s1\ncapacity: 2\nbins:\n  - {id: b1, items: [a, b]}\n  - {id: b2, items: [a, b, c]}\n",
+    )
+    .expect("write data");
+    let out = run_in(
+        tmp.path(),
+        &[
+            "verify",
+            "--schema",
+            "schema.yaml",
+            "--data",
+            "data.yaml",
+            "--message-format",
+            "json",
+        ],
+    );
+    let lines = json_lines(&out);
+    let exceeded: Vec<(&str, &str)> = lines
+        .iter()
+        .filter(|line| line["kind"] == "count-bound/exceeded")
+        .map(|line| {
+            (
+                line["place"].as_str().unwrap_or_default(),
+                line["level"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        exceeded,
+        vec![("b2", "error")],
+        "only the bin over its shelf's bound is reported; got:\n{lines:#?}"
+    );
+    assert_eq!(out.status.code(), FOUND, "stderr: {}", stderr_of(&out));
+}
+
+#[test]
 fn verify_reports_ids_that_mint_one_iri_across_two_data_files() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([

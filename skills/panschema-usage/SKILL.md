@@ -3,7 +3,7 @@ name: panschema-usage
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.5.25"
+  version: "0.5.26"
 ---
 
 # panschema
@@ -60,7 +60,7 @@ worth more than skimming everything else.
 4. **`--strict` is narrower than it sounds.** It fails on unmodeled
    constructs, dangling references, colliding slot definitions, untyped
    slots, rule constants outside their enum's values, defective
-   `asserts_absence`/`expand_against`/`records_version_of`/`asserts_value` declarations,
+   `asserts_absence`/`expand_against`/`records_version_of`/`asserts_value`/`bounds_count_of` declarations,
    and instance-data violations. It does *not* fail on
    unprojected-construct, Postgres-skip, or SHACL-skip warnings — those
    stay warnings.

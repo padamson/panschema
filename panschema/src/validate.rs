@@ -201,6 +201,8 @@ pub enum ViolationKind {
     NoRootMatched { candidates: Vec<String> },
     /// A record whose bare values could not expand against their base.
     ExpansionGap(crate::instances::ExpansionGap),
+    /// More distinct values at a counted slot than the nearest bound allows.
+    CountBoundExceeded(crate::diagnostics::CountBoundExceeded),
     /// An identifier used by more than one record.
     DuplicateIdentifier { id: String },
     /// A collection entry that loaded nothing.
@@ -241,6 +243,7 @@ impl ViolationKind {
             Self::UndeclaredField(_) => kind::UNDECLARED_FIELD,
             Self::NoRootMatched { .. } => kind::NO_ROOT_MATCHED,
             Self::ExpansionGap(_) => kind::EXPANSION_GAP,
+            Self::CountBoundExceeded(_) => kind::COUNT_BOUND_EXCEEDED,
             Self::DuplicateIdentifier { .. } => kind::DUPLICATE_IDENTIFIER,
             Self::UnusableCollectionEntry(_) => kind::UNUSABLE_COLLECTION_ENTRY,
             Self::UndeclaredInlining(_) => kind::UNDECLARED_INLINING,
@@ -406,6 +409,7 @@ impl ViolationKind {
                 crate::rules::rule_label_of(rule_title.as_deref(), *rule_index)
             ),
             Self::DanglingReference(d) => d.detail(),
+            Self::CountBoundExceeded(e) => e.detail(),
             Self::UndeclaredField(u) => match u.key_kind {
                 Some(crate::instances::KeyKind::Quotable) => format!(
                     "field key `{}` (class `{}`) is not a string; its value is dropped — \
@@ -997,6 +1001,14 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         out.push(Violation {
             record: g.record.clone(),
             kind: ViolationKind::ExpansionGap(g.clone()),
+        });
+    }
+
+    let bounds = crate::diagnostics::count_bound_bindings(schema);
+    for e in crate::diagnostics::count_bounds_exceeded(schema, set, &bounds) {
+        out.push(Violation {
+            record: e.record.clone(),
+            kind: ViolationKind::CountBoundExceeded(e),
         });
     }
 
@@ -4140,5 +4152,26 @@ classes:
             )],
             "a finding about the container's own slot names the slot"
         );
+    }
+
+    #[test]
+    fn a_count_over_its_bound_is_a_conformance_violation_at_the_held_record() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Shelf:\n    tree_root: true\n    attributes:\n      id: \
+             {identifier: true}\n      capacity: {range: integer, annotations: {bounds_count_of: \
+             {value: {counted_slot: items}}}}\n      bins: {range: Bin, multivalued: true, \
+             inlined_as_list: true}\n  Bin:\n    attributes:\n      id: {identifier: true}\n      \
+             items: {range: string, multivalued: true}\n",
+        )
+        .expect("parse schema");
+        let violations = validate_instance_data(
+            &schema,
+            &data("id: s1\ncapacity: 1\nbins:\n  - {id: b1, items: [a, b]}\n"),
+        );
+        let found: Vec<(&str, &str)> = violations
+            .iter()
+            .map(|v| (v.record.as_str(), Finding::kind(v)))
+            .collect();
+        assert_eq!(found, vec![("b1", kind::COUNT_BOUND_EXCEEDED)]);
     }
 }

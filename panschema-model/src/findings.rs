@@ -159,6 +159,12 @@ pub mod kind {
         /// A slot's `asserts_value` declaration the schema cannot honor.
         VALUE_CLAIM_INVALID_DECLARATION = "value-claim/invalid-declaration";
 
+        /// A record holding more distinct values at the counted slot than
+        /// the nearest bound above it allows.
+        COUNT_BOUND_EXCEEDED = "count-bound/exceeded";
+        /// A slot's `bounds_count_of` declaration the schema cannot honor.
+        COUNT_BOUND_INVALID_DECLARATION = "count-bound/invalid-declaration";
+
         /// One IRI minted by more than one dataset.
         DATASET_IRI_COLLISION = "dataset/iri-collision";
         /// One record that several datasets define and scope apart.

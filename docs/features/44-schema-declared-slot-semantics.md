@@ -1,10 +1,11 @@
 # Feature 44: Schema-Declared Slot Semantics
 
-**Feature:** Read four slot-level meanings from the schema that declares
+**Feature:** Read five slot-level meanings from the schema that declares
 the slot — absence claims (`asserts_absence`), anchor-IRI expansion
-(`expand_against`), version pins (`records_version_of`), and value claims
-(`asserts_value`) — instead of from each consumer's manifest, and bind
-cross-graph checks to the dataset a record itself names.
+(`expand_against`), version pins (`records_version_of`), value claims
+(`asserts_value`), and count bounds (`bounds_count_of`) — instead of from
+each consumer's manifest, and bind cross-graph checks to the dataset a
+record itself names.
 
 **User Story:** As the author of a contract schema whose slots carry
 domain semantics (this slot's values are joint-absence claims; this
@@ -137,6 +138,31 @@ warns per entry and fails under `--strict`; a claim that cannot be
 evaluated is reported uncheckable, never as holding. A slot the record's
 class carries but the record leaves unset is a failing claim: absence
 is not a match.
+
+**Count bounds.** An integer slot annotated
+
+```yaml
+retrieval_budget:
+  range: integer
+  annotations:
+    bounds_count_of:
+      value:
+        counted_slot: expected_anchors
+```
+
+declares: a record's value at this slot is the most distinct values
+`counted_slot` may hold on any record beneath it, together with the
+values of every slot specializing `counted_slot` through `is_a`. A record
+beneath the bound is one held through inlined containment at any depth,
+and the record carrying the bound counts too. The nearest record that
+sets the bounding slot supplies the bound, as `expand_against` finds its
+base: the held record itself, then each containing record outward. A
+record that leaves the slot unset bounds nothing and hides nothing
+further out. The bound relates a value on one record to a count on
+another, which no LinkML rule or cardinality facet can state, so the
+schema says it once and every consumer's `verify` checks it. It needs no
+sibling graph: per-file `verify` checks it, and an exceeded bound is a
+conformance error like a failed rule.
 
 **Dataset binding.** Where the referring record itself names which
 target dataset its claims are about, checks bind to that dataset rather
@@ -373,6 +399,52 @@ RDF must carry them (see Open Questions for the vocabulary).
   claim is written the way the sibling's data writes the value.
 - A slot range with `any_of` alternatives is uncheckable: which member
   reads the string is not decidable from the claim.
+
+### Slice 8: count bounds are checked per file — Complete
+
+**Acceptance criteria:**
+
+- [x] A record whose count of distinct values at the counted slot (and
+      at slots specializing it through `is_a`) is at or under the
+      nearest bound conforms; one over it is an error finding of kind
+      `count-bound/exceeded` that names the record, its count, the
+      bound, the bounding slot, and the record the bound came from, and
+      `verify` exits 1 on it, per file and manifest-wide alike.
+- [x] A value repeated at the counted slot counts once; a value held at
+      both the counted slot and a slot specializing it counts once.
+- [x] The nearest record that sets the bounding slot supplies the bound:
+      a bound on the held record itself wins over one on a containing
+      record, and a record between them that leaves the slot unset
+      neither bounds nor hides the outer bound.
+- [x] No record setting the bounding slot above a held record means no
+      finding for it, however many values it holds.
+- [x] Declaration defects are load warnings of kind
+      `count-bound/invalid-declaration` that `--strict` refuses: a value
+      that is not a mapping, a missing, non-string, or unknown field, a
+      `counted_slot` naming the bounding slot itself, an annotated slot
+      or `counted_slot` no class carries, an annotated slot that is
+      multivalued or whose range is not an integer, and an annotated slot a `tree_root` class with
+      no identifier carries (that container is no record, so its value
+      would bound nothing).
+- [x] The shipped skill documents the annotation's value shape and the
+      finding kinds (a test holds the skill to it).
+
+**Notes:**
+- Same `ScopedBindings` walk and registration table as the other
+  families, with no sibling check: nothing in `resolve_against` gates
+  it, and per-file `verify` reports no unchecked count for it.
+- A bound whose value is not an integer is a conformance finding at
+  the bounding slot already (`conformance/scalar-kind-outside-range`)
+  and bounds nothing; it is still the nearest, so no outer bound reaches
+  past it.
+- Only records whose class carries the counted slot (or a slot
+  specializing it) are counted, so a negative bound is exceeded by each
+  of those and by nothing else.
+- Defects in a declaration are judged only on the classes it governs: a
+  declaration in one class's `slot_usage` says nothing about another
+  class carrying the same slot.
+- Values are compared after load, so an anchor expanded through
+  `expand_against` counts once whether written bare or as its IRI.
 
 ---
 

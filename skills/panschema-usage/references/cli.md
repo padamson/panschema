@@ -51,7 +51,7 @@ Rust's default, and is a bug in panschema.
   constructs, dangling references, colliding slot definitions (the same
   slot name defined at several sites, which would mint one RDF property
   IRI), untyped slots, rule constants that name no permissible value of
-  their slot's enum, defective `asserts_absence`/`expand_against`/`records_version_of`/`asserts_value` declarations,
+  their slot's enum, defective `asserts_absence`/`expand_against`/`records_version_of`/`asserts_value`/`bounds_count_of` declarations,
   and instance-data violations. It does *not* promote
   unprojected-construct, Postgres-skip, or SHACL-skip warnings to errors.
 - **Pointing at a record in another graph.** In instance data, a
@@ -152,8 +152,9 @@ references that leave a dataset stays on stderr. Every kind:
 | An `asserts_absence` claim | `absence-claim/contradicted`, `absence-claim/uncheckable`, `absence-claim/unchecked` |
 | A `records_version_of` pin | `version-pin/mismatched`, `version-pin/uncheckable`, `version-pin/unchecked` |
 | An `asserts_value` claim | `value-claim/differs`, `value-claim/unset`, `value-claim/slot-not-carried`, `value-claim/not-among`, `value-claim/uncheckable`, `value-claim/unchecked` |
+| A record over its `bounds_count_of` bound | `count-bound/exceeded` |
 | Datasets that overlap (a note) | `dataset/iri-collision`, `dataset/unintended-split` |
-| A schema defect bare `verify --strict` refuses | `schema/unmodeled-construct`, `schema/dangling-reference`, `schema/property-iri-collision`, `schema/class-iri-collision`, `schema/untyped-slot`, `schema/impossible-rule-value`, `absence-claim/invalid-declaration`, `anchor-expansion/invalid-declaration`, `version-pin/invalid-declaration`, `value-claim/invalid-declaration` |
+| A schema defect bare `verify --strict` refuses | `schema/unmodeled-construct`, `schema/dangling-reference`, `schema/property-iri-collision`, `schema/class-iri-collision`, `schema/untyped-slot`, `schema/impossible-rule-value`, `absence-claim/invalid-declaration`, `anchor-expansion/invalid-declaration`, `version-pin/invalid-declaration`, `value-claim/invalid-declaration`, `count-bound/invalid-declaration` |
 | Any other schema load warning | `schema/construct-dropped`, `schema/root-overrides-import`, `schema/identifier-key-conflict`, `schema/unique-key-names-no-slot`, `schema/unexpandable-uri`, `schema/specialization-without-parent`, `schema/unmodeled-annotation-nesting`, `schema/unknown-panschema-annotation`, `schema/multiple-tree-roots`, and `schema/no-tree-root` (from `panschema-model`'s `load_dataset` only) |
 | The entry's `[check.<name>]` policy (a note) | `check/no-resolve-against`, `check/sibling-declares-no-datasets` |
 

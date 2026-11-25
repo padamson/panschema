@@ -1864,6 +1864,18 @@ pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
             unchecked_kind: kind::VALUE_CLAIM_UNCHECKED,
         }),
     },
+    SlotSemanticsFamily {
+        noun: "count-bound",
+        annotation: "bounds_count_of",
+        issues: |schema| {
+            count_bound_declaration_issues(schema)
+                .iter()
+                .map(|i| i.message())
+                .collect()
+        },
+        invalid_declaration_kind: kind::COUNT_BOUND_INVALID_DECLARATION,
+        sibling_check: None,
+    },
 ];
 
 /// Claims of one family a dataset states that a check reading no sibling
@@ -2417,6 +2429,328 @@ pub fn value_claim_declaration_issues(
     schema: &SchemaDefinition,
 ) -> Vec<ValueClaimDeclarationIssue> {
     value_claim_declarations(schema).1
+}
+
+/// A `bounds_count_of` declaration: a record's integer value at the
+/// annotated slot is the most distinct values `counted_slot` (with the
+/// slots specializing it) may hold on any record at or beneath it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CountBound {
+    Of {
+        counted_slot: String,
+    },
+    /// A defective declaration still binds, and bounds nothing.
+    Malformed,
+}
+
+pub type CountBoundBindings = ScopedBindings<CountBound>;
+
+/// A defect in a `bounds_count_of` declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountBoundDeclarationIssue {
+    pub slot: String,
+    pub detail: String,
+}
+
+impl CountBoundDeclarationIssue {
+    pub fn message(&self) -> String {
+        format!("`bounds_count_of` on slot `{}`: {}", self.slot, self.detail)
+    }
+}
+
+/// The one parse of a `bounds_count_of` annotation value: a mapping with
+/// a string `counted_slot` (not the slot itself) and nothing else.
+fn parse_count_bound_declaration(
+    slot: &str,
+    value: &serde_norway::Value,
+    issues: &mut Vec<CountBoundDeclarationIssue>,
+) -> CountBound {
+    let mut issue = |detail: String| {
+        issues.push(CountBoundDeclarationIssue {
+            slot: slot.to_string(),
+            detail,
+        })
+    };
+    let serde_norway::Value::Mapping(m) = value else {
+        issue(
+            "the value must be a mapping under `value:` with `counted_slot` naming the slot \
+             whose values it counts"
+                .to_string(),
+        );
+        return CountBound::Malformed;
+    };
+    for key in m.keys().filter(|k| k.as_str() != Some("counted_slot")) {
+        issue(format!(
+            "unrecognized field `{}` — the declaration takes only `counted_slot`",
+            key.as_str().unwrap_or("<non-string key>")
+        ));
+    }
+    match m.get("counted_slot").map(|v| v.as_str()) {
+        None => {
+            issue("the declaration needs `counted_slot`".to_string());
+            CountBound::Malformed
+        }
+        Some(None) => {
+            issue("`counted_slot` must be a string naming a slot".to_string());
+            CountBound::Malformed
+        }
+        Some(Some(named)) if named == slot => {
+            issue("`counted_slot` names the slot itself".to_string());
+            CountBound::Malformed
+        }
+        Some(Some(named)) => CountBound::Of {
+            counted_slot: named.to_string(),
+        },
+    }
+}
+
+/// The parse alone: every `bounds_count_of` declaration from the shared
+/// walk, beside the defects in how each is written.
+fn parsed_count_bounds(
+    schema: &SchemaDefinition,
+) -> (CountBoundBindings, Vec<CountBoundDeclarationIssue>) {
+    let mut issues = Vec::new();
+    let bindings = scoped_declarations(schema, "bounds_count_of", |name, value| {
+        parse_count_bound_declaration(name, value, &mut issues)
+    });
+    (bindings, issues)
+}
+
+/// Every `bounds_count_of` declaration and every defect in one. Defects
+/// are reported once per slot, however many scopes restate them, and each
+/// class is judged only by the declaration that governs it.
+pub fn count_bound_declarations(
+    schema: &SchemaDefinition,
+) -> (CountBoundBindings, Vec<CountBoundDeclarationIssue>) {
+    let (bindings, parsed) = parsed_count_bounds(schema);
+    if bindings.is_empty() {
+        return (bindings, parsed);
+    }
+    let resolved: BTreeMap<&String, BTreeMap<String, SlotDefinition>> = schema
+        .classes
+        .iter()
+        .map(|(name, class)| {
+            (
+                name,
+                crate::linkml_resolve::resolve_effective_slots(class, schema),
+            )
+        })
+        .collect();
+    let carried = |slot: &str| resolved.values().any(|slots| slots.contains_key(slot));
+    let mut post: BTreeSet<(String, String)> =
+        parsed.into_iter().map(|i| (i.slot, i.detail)).collect();
+    let mut defect = |slot: &str, detail: String| {
+        post.insert((slot.to_string(), detail));
+    };
+    for (slot, scoped) in &bindings.by_slot {
+        if !carried(slot) {
+            defect(
+                slot,
+                "no class carries this slot, so no record can state a bound".to_string(),
+            );
+        }
+        for bound in scoped.schema_wide.iter().chain(scoped.by_class.values()) {
+            if let CountBound::Of { counted_slot } = bound
+                && !carried(counted_slot)
+            {
+                defect(
+                    slot,
+                    format!("`counted_slot` names `{counted_slot}`, which no class carries"),
+                );
+            }
+        }
+    }
+    for (class_name, slots) in &resolved {
+        let class = &schema.classes[*class_name];
+        for (slot, def) in slots {
+            if bindings
+                .governing(std::slice::from_ref(class_name), slot)
+                .is_none()
+            {
+                continue;
+            }
+            if def.multivalued {
+                defect(
+                    slot,
+                    format!("it is multivalued on `{class_name}`, so it holds no single bound"),
+                );
+            }
+            let range = def.range.as_deref().or(schema.default_range.as_deref());
+            match range {
+                Some(r) if crate::primitives::effective_primitive(schema, r) == Some("integer") => {
+                }
+                Some(r) => defect(
+                    slot,
+                    format!("it ranges over `{r}` on `{class_name}`, which is not an integer"),
+                ),
+                None => defect(
+                    slot,
+                    format!("it has no range on `{class_name}`, so it holds no integer"),
+                ),
+            };
+            if class.tree_root && !slots.values().any(|d| d.identifier) {
+                defect(
+                    slot,
+                    format!(
+                        "`{class_name}` carries it as a `tree_root` with no identifier, a \
+                         container that is no record, so a value there bounds nothing"
+                    ),
+                );
+            }
+        }
+    }
+    let issues = post
+        .into_iter()
+        .map(|(slot, detail)| CountBoundDeclarationIssue { slot, detail })
+        .collect();
+    (bindings, issues)
+}
+
+/// The declarations alone — the checker's half of [`count_bound_declarations`],
+/// without its defect analysis.
+pub fn count_bound_bindings(schema: &SchemaDefinition) -> CountBoundBindings {
+    parsed_count_bounds(schema).0
+}
+
+/// The defects alone — the load diagnostics' half of [`count_bound_declarations`].
+pub fn count_bound_declaration_issues(
+    schema: &SchemaDefinition,
+) -> Vec<CountBoundDeclarationIssue> {
+    count_bound_declarations(schema).1
+}
+
+/// A record holding more distinct values at `counted_slot` (with the
+/// slots specializing it) than the nearest bound above it allows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountBoundExceeded {
+    pub record: String,
+    pub class: String,
+    pub bounding_slot: String,
+    pub counted_slot: String,
+    pub count: usize,
+    pub bound: i64,
+    /// The record whose `bounding_slot` value is the bound.
+    pub bound_by: String,
+}
+
+impl CountBoundExceeded {
+    /// The problem clause, without the record — for a caller that labels
+    /// the record its own way.
+    pub fn detail(&self) -> String {
+        format!(
+            "slot `{}` (class `{}`) holds {} distinct value(s), more than the {} that `{}` on \
+             `{}` allows",
+            self.counted_slot,
+            self.class,
+            self.count,
+            self.bound,
+            self.bounding_slot,
+            self.bound_by
+        )
+    }
+
+    pub fn message(&self) -> String {
+        format!("record `{}`: {}", self.record, self.detail())
+    }
+}
+
+finding!(CountBoundExceeded, kind::COUNT_BOUND_EXCEEDED, record);
+
+/// Every record in `set` over the bound its nearest bounding record sets.
+/// A record's bound is its own value at a bounding slot, else the value
+/// of the nearest record holding it through containment.
+pub fn count_bounds_exceeded(
+    schema: &SchemaDefinition,
+    set: &crate::instances::InstanceSet,
+    bindings: &CountBoundBindings,
+) -> Vec<CountBoundExceeded> {
+    use crate::instances::{Instance, InstanceValue, ScalarValue};
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+    // An integral float is the integer it spells, as `kind_matches` reads it.
+    let normalized = |value: &InstanceValue| match value {
+        InstanceValue::Scalar(ScalarValue::Float(f)) if f.fract() == 0.0 => {
+            InstanceValue::Scalar(ScalarValue::Integer(*f as i64))
+        }
+        other => other.clone(),
+    };
+    let mut by_id: BTreeMap<&str, &Instance> = BTreeMap::new();
+    let mut holder: BTreeMap<&str, &str> = BTreeMap::new();
+    for record in &set.instances {
+        by_id.entry(record.id.as_str()).or_insert(record);
+        for value in record.slot_values.iter().flat_map(|sv| &sv.values) {
+            if let InstanceValue::Reference { target, held: true } = value {
+                holder.entry(target.as_str()).or_insert(record.id.as_str());
+            }
+        }
+    }
+    let mut families: BTreeMap<(&str, &str), BTreeSet<String>> = BTreeMap::new();
+    let mut out = Vec::new();
+    for record in &set.instances {
+        let Some(class_name) = record.types.first() else {
+            continue;
+        };
+        let Some(class) = schema.classes.get(class_name) else {
+            continue;
+        };
+        // The record itself, then each record holding it, outward. A holder
+        // is built after what it holds, so the walk ends; the cap keeps it
+        // finite should that ever change.
+        let chain: Vec<&Instance> = std::iter::successors(Some(record), |r| {
+            holder
+                .get(r.id.as_str())
+                .and_then(|id| by_id.get(id).copied())
+        })
+        .take(set.instances.len())
+        .collect();
+        for bounding_slot in bindings.by_slot.keys() {
+            let mut setters = chain.iter().filter_map(|r| {
+                r.values_at(bounding_slot).next()?;
+                Some((*r, bindings.governing(&r.types, bounding_slot)?))
+            });
+            let Some((setter, CountBound::Of { counted_slot })) = setters.next() else {
+                continue;
+            };
+            let bound = match setter
+                .values_at(bounding_slot)
+                .map(normalized)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                [InstanceValue::Scalar(ScalarValue::Integer(n))] => *n,
+                _ => continue,
+            };
+            let family = families
+                .entry((class_name.as_str(), counted_slot.as_str()))
+                .or_insert_with(|| {
+                    let resolved = crate::linkml_resolve::resolve_effective_slots(class, schema);
+                    among_family(schema, &resolved, counted_slot)
+                });
+            if family.is_empty() {
+                continue;
+            }
+            let mut distinct: Vec<InstanceValue> = Vec::new();
+            for value in family.iter().flat_map(|slot| record.values_at(slot)) {
+                let value = normalized(value);
+                if !matches!(value, InstanceValue::Unexpected(_)) && !distinct.contains(&value) {
+                    distinct.push(value);
+                }
+            }
+            if distinct.len() as i64 > bound {
+                out.push(CountBoundExceeded {
+                    record: record.id.clone(),
+                    class: class_name.clone(),
+                    bounding_slot: bounding_slot.clone(),
+                    counted_slot: counted_slot.clone(),
+                    count: distinct.len(),
+                    bound,
+                    bound_by: setter.id.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// One `resolve_against` sibling as the cross-graph checks read it: the
@@ -6481,6 +6815,19 @@ classes:
                 "q5.expected_values[2]",
             ),
             (
+                Box::new(CountBoundExceeded {
+                    record: "q6".to_string(),
+                    class: "Question".to_string(),
+                    bounding_slot: "budget".to_string(),
+                    counted_slot: "anchors".to_string(),
+                    count: 3,
+                    bound: 2,
+                    bound_by: "bench".to_string(),
+                }),
+                "count-bound/exceeded",
+                "q6",
+            ),
+            (
                 Box::new(IriCollision {
                     iri: "https://example.org/catalog/aws".to_string(),
                     occurrences: vec![],
@@ -6662,6 +7009,261 @@ classes:
             }),
         );
         assert!(value_claim_bindings(&SchemaDefinition::new("bare")).is_empty());
+    }
+
+    const SHELF: &str = "id: https://example.org/store\nname: store\nprefixes:\n  store: \
+         https://example.org/store/\ndefault_prefix: store\nclasses:\n  Shelf:\n    \
+         tree_root: true\n    slots: [id, capacity, bins]\n  Bin:\n    slots: [id, capacity, \
+         items, extras, drawers, spare]\n  Drawer:\n    slots: [id, items]\nslots:\n  id: \
+         {identifier: true}\n  capacity:\n    range: integer\n    annotations:\n      \
+         bounds_count_of:\n        value:\n          counted_slot: items\n  bins: {range: \
+         Bin, multivalued: true, inlined_as_list: true}\n  drawers: {range: Drawer, \
+         multivalued: true, inlined_as_list: true}\n  spare: {range: Drawer}\n  items: {range: \
+         string, multivalued: true}\n  extras: {is_a: items, range: string, multivalued: true}\n";
+
+    fn shelf_schema() -> SchemaDefinition {
+        parse(SHELF)
+    }
+
+    fn exceeded_bounds(data: &str) -> Vec<CountBoundExceeded> {
+        exceeded_in(&shelf_schema(), data)
+    }
+
+    fn exceeded_in(schema: &SchemaDefinition, data: &str) -> Vec<CountBoundExceeded> {
+        let data: serde_norway::Value = serde_norway::from_str(data).expect("yaml");
+        let set = crate::instances::InstanceSet::from_linkml_data(schema, &data);
+        let mut found = count_bounds_exceeded(schema, &set, &count_bound_bindings(schema));
+        found.sort_by(|a, b| a.record.cmp(&b.record));
+        found
+    }
+
+    fn exceeded(
+        record: &str,
+        class: &str,
+        count: usize,
+        bound: i64,
+        by: &str,
+    ) -> CountBoundExceeded {
+        CountBoundExceeded {
+            record: record.to_string(),
+            class: class.to_string(),
+            bounding_slot: "capacity".to_string(),
+            counted_slot: "items".to_string(),
+            count,
+            bound,
+            bound_by: by.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_held_record_over_the_bound_exceeds_it_and_one_at_the_bound_does_not() {
+        assert_eq!(
+            exceeded_bounds(
+                "id: s1\ncapacity: 3\nbins:\n  - {id: b1, items: [a]}\n  - {id: b2, items: [a, \
+                 b, c]}\n  - {id: b3, items: [a, b, c, d]}\n"
+            ),
+            vec![exceeded("b3", "Bin", 4, 3, "s1")]
+        );
+    }
+
+    #[test]
+    fn a_value_counts_once_however_often_the_counted_slot_and_its_specializations_hold_it() {
+        assert_eq!(
+            exceeded_bounds(
+                "id: s1\ncapacity: 2\nbins:\n  - {id: b1, items: [a, a, b]}\n  - {id: b2, items: \
+                 [a, b], extras: [b]}\n  - {id: b3, items: [a, b], extras: [c]}\n"
+            ),
+            vec![exceeded("b3", "Bin", 3, 2, "s1")]
+        );
+    }
+
+    #[test]
+    fn the_nearest_record_setting_the_bound_supplies_it_and_an_unset_one_hides_nothing() {
+        assert_eq!(
+            exceeded_bounds(
+                "id: s1\ncapacity: 1\nbins:\n  - {id: b1, capacity: 5, items: [a, b]}\n  - {id: \
+                 b2, drawers: [{id: d1, items: [a, b]}]}\n  - {id: b3, capacity: 3, drawers: \
+                 [{id: d2, items: [a, b, c, d]}]}\n"
+            ),
+            vec![
+                exceeded("d1", "Drawer", 2, 1, "s1"),
+                exceeded("d2", "Drawer", 4, 3, "b3"),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_integral_float_bound_bounds_like_its_integer() {
+        assert_eq!(
+            exceeded_bounds("id: s1\ncapacity: 1.0\nbins:\n  - {id: b1, items: [a, b]}\n"),
+            vec![exceeded("b1", "Bin", 2, 1, "s1")]
+        );
+    }
+
+    #[test]
+    fn the_finding_names_its_slots_count_bound_and_bounding_record() {
+        let detail = exceeded("b3", "Bin", 4, 3, "s1").detail();
+        for token in [
+            "`items`",
+            "`Bin`",
+            "4 distinct",
+            "the 3",
+            "`capacity`",
+            "`s1`",
+        ] {
+            assert!(detail.contains(token), "names {token}; got: {detail}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_nearest_declaration_shadows_the_outer_bound() {
+        let schema = parse(&SHELF.replace(
+            "  Drawer:\n",
+            "    slot_usage:\n      capacity: {annotations: {bounds_count_of: {value: null}}}\n  \
+             Drawer:\n",
+        ));
+        assert_eq!(
+            exceeded_in(
+                &schema,
+                "id: s1\ncapacity: 1\nbins:\n  - {id: b1, capacity: 5, items: [a, b]}\n"
+            ),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_value_the_slot_cannot_hold_is_not_counted() {
+        assert_eq!(
+            exceeded_bounds("id: s1\ncapacity: 1\nbins:\n  - {id: b1, items: [a, {x: 1}]}\n"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_record_cited_but_not_held_takes_no_bound_from_its_citer() {
+        assert_eq!(
+            exceeded_bounds(
+                "id: s1\ncapacity: 5\nbins:\n  - {id: b1, capacity: 1, spare: d1}\n  - {id: \
+                 b2, drawers: [{id: d1, items: [a, b]}]}\n"
+            ),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn an_unusable_nearest_bound_shadows_the_outer_one() {
+        assert_eq!(
+            exceeded_bounds(
+                "id: s1\ncapacity: 2\nbins:\n  - {id: b1, capacity: 1.5, items: [a, b, c]}\n"
+            ),
+            vec![],
+            "a bin's own unusable bound is the nearest, so the shelf's does not reach it"
+        );
+    }
+
+    #[test]
+    fn only_records_whose_class_carries_the_counted_slot_are_counted() {
+        assert_eq!(
+            exceeded_bounds(
+                "id: s1\ncapacity: -1\nbins:\n  - {id: b1, drawers: [{id: d1, items: [a]}]}\n"
+            ),
+            vec![
+                exceeded("b1", "Bin", 0, -1, "s1"),
+                exceeded("d1", "Drawer", 1, -1, "s1"),
+            ],
+            "the shelf carries no `items`, so even an impossible bound does not count it"
+        );
+    }
+
+    #[test]
+    fn an_integral_float_and_its_integer_are_one_value() {
+        assert_eq!(
+            exceeded_bounds("id: s1\ncapacity: 1\nbins:\n  - {id: b1, items: [1, 1.0]}\n"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_bound_above_it_is_not_counted() {
+        assert_eq!(
+            exceeded_bounds("id: s1\nbins:\n  - {id: b1, items: [a, b, c, d, e]}\n"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn count_bound_declaration_defects_are_load_warnings() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Vessel:\n    tree_root: true\n    \
+             slots: [rootcap, boxes]\n  Box:\n    slots: [id, capacity, items, bare, loose, \
+             partial, typed, selfish, ghostly, worded, many, size, rangeless]\n    slot_usage:\n      \
+             size: {range: integer, annotations: {bounds_count_of: {value: {counted_slot: \
+             items}}}}\n  Label:\n    slots: [size]\nslots:\n  id: {identifier: true}\n  \
+             boxes: {range: Box, multivalued: true, inlined_as_list: true}\n  items: {range: \
+             string, multivalued: true}\n  capacity: {range: integer, annotations: \
+             {bounds_count_of: {value: {counted_slot: items}}}}\n  rootcap: {range: integer, \
+             annotations: {bounds_count_of: {value: {counted_slot: items}}}}\n  bare: {range: \
+             integer, annotations: {bounds_count_of: {value: null}}}\n  loose: {range: integer, \
+             annotations: {bounds_count_of: {value: {counted_slot: items, extra: 1}}}}\n  \
+             partial: {range: integer, annotations: {bounds_count_of: {value: {}}}}\n  typed: \
+             {range: integer, annotations: {bounds_count_of: {value: {counted_slot: 3}}}}\n  \
+             selfish: {range: integer, annotations: {bounds_count_of: {value: {counted_slot: \
+             selfish}}}}\n  ghostly: {range: integer, annotations: {bounds_count_of: {value: \
+             {counted_slot: ghost}}}}\n  worded: {range: string, annotations: {bounds_count_of: \
+             {value: {counted_slot: items}}}}\n  orphan: {range: integer, annotations: \
+             {bounds_count_of: {value: {counted_slot: items}}}}\n  many: {range: integer, \
+             multivalued: true, annotations: {bounds_count_of: {value: {counted_slot: items}}}}\n  \
+             size: {range: string}\n  rangeless: {annotations: {bounds_count_of: {value: \
+             {counted_slot: items}}}}\n",
+        );
+        let issues = count_bound_declaration_issues(&schema);
+        let has = |slot: &str, needle: &str| {
+            issues
+                .iter()
+                .any(|i| i.slot == slot && i.detail.contains(needle))
+        };
+        for (slot, needle) in [
+            ("bare", "mapping"),
+            ("loose", "`extra`"),
+            ("partial", "needs `counted_slot`"),
+            ("typed", "`counted_slot` must be a string"),
+            ("selfish", "itself"),
+            ("ghostly", "`ghost`"),
+            ("worded", "`string`"),
+            ("rangeless", "no range"),
+            ("orphan", "no class carries"),
+            ("rootcap", "tree_root"),
+            ("many", "multivalued"),
+        ] {
+            assert!(
+                has(slot, needle),
+                "`{slot}`'s defect names {needle}: {issues:?}"
+            );
+        }
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.slot == "capacity" || i.slot == "size"),
+            "a well-formed declaration has no defects, and one in a class's `slot_usage` is not \
+             judged by another class carrying the slot: {issues:?}"
+        );
+        assert_eq!(
+            count_bound_declaration_issues(&shelf_schema()),
+            vec![],
+            "an identified root and its records carry the bound with no defect"
+        );
+        let bindings = count_bound_bindings(&schema);
+        assert_eq!(
+            bindings.governing(&["Box".to_string()], "bare"),
+            Some(&CountBound::Malformed),
+            "a defective declaration still binds, and bounds nothing"
+        );
+        assert_eq!(
+            bindings.governing(&["Box".to_string()], "capacity"),
+            Some(&CountBound::Of {
+                counted_slot: "items".to_string()
+            }),
+        );
     }
 
     #[test]
@@ -7450,7 +8052,8 @@ classes:
     #[test]
     fn every_listed_schema_load_kind_is_raised_by_some_schema() {
         let families = "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor, \
-             pinned, claims]\nslots:\n  anchor:\n    range: uri\n    annotations:\n      \
+             pinned, claims, capped]\nslots:\n  capped:\n    range: integer\n    annotations:\n      \
+             bounds_count_of:\n        value: null\n  anchor:\n    range: uri\n    annotations:\n      \
              expand_against: anchor\n  pinned:\n    range: string\n    annotations:\n      \
              records_version_of:\n        value:\n          sibling_slot: pinned\n  claims:\n    \
              range: string\n    annotations:\n      asserts_value:\n        value: null\n  \
@@ -7514,6 +8117,7 @@ classes:
             (kind::ANCHOR_EXPANSION_INVALID_DECLARATION, families),
             (kind::VERSION_PIN_INVALID_DECLARATION, families),
             (kind::VALUE_CLAIM_INVALID_DECLARATION, families),
+            (kind::COUNT_BOUND_INVALID_DECLARATION, families),
         ];
         for (expected, yaml) in raising {
             let load = schema_load_diagnostics(&parse(yaml));
@@ -7573,6 +8177,7 @@ classes:
                 kind::ANCHOR_EXPANSION_INVALID_DECLARATION,
                 kind::VERSION_PIN_INVALID_DECLARATION,
                 kind::VALUE_CLAIM_INVALID_DECLARATION,
+                kind::COUNT_BOUND_INVALID_DECLARATION,
             ])
         );
         assert_eq!(
@@ -7608,7 +8213,8 @@ classes:
         // shared category counts each.
         let schema = parse(
             "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor, pinned, \
-             claims]\nslots:\n  \
+             claims, capped]\nslots:\n  \
+             capped:\n    range: integer\n    annotations:\n      bounds_count_of:\n        value: null\n  \
              anchor:\n    range: uri\n    annotations:\n      expand_against: anchor\n  \
              pinned:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          \
              sibling_slot: pinned\n  \
@@ -7627,6 +8233,7 @@ classes:
             ("expand_against", "anchor-expansion/invalid-declaration"),
             ("records_version_of", "version-pin/invalid-declaration"),
             ("asserts_value", "value-claim/invalid-declaration"),
+            ("bounds_count_of", "count-bound/invalid-declaration"),
         ] {
             assert!(
                 load.iter().any(|m| m.kind == family_kind

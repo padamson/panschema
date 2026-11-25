@@ -91,6 +91,7 @@ fn every_slot_semantics_family_is_readable_as_data() {
         [
             "asserts_absence",
             "asserts_value",
+            "bounds_count_of",
             "expand_against",
             "records_version_of"
         ],
