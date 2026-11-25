@@ -192,10 +192,15 @@ pub trait Runner {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ProcessRunner;
 
-impl Runner for ProcessRunner {
-    fn run(&self, invocation: &Invocation) -> Result<String, String> {
+impl ProcessRunner {
+    /// The process [`Runner::run`] spawns for `invocation`. It runs with
+    /// none of the variables that would point git at another repository,
+    /// so git run in the checkout finds the checkout's own; git's
+    /// configuration, which an install from a git URL may need, stays.
+    fn command(invocation: &Invocation) -> Result<Command, String> {
         let program = invocation.program.display();
         let mut command = Command::new(&invocation.program);
+        crate::publish::clear_git_location(&mut command);
         command.args(&invocation.args);
         if let Some(cwd) = &invocation.cwd {
             command.current_dir(cwd);
@@ -209,7 +214,14 @@ impl Runner for ProcessRunner {
                 .map_err(|e| format!("could not build a PATH for `{program}`: {e}"))?;
             command.env("PATH", path);
         }
-        let output = command
+        Ok(command)
+    }
+}
+
+impl Runner for ProcessRunner {
+    fn run(&self, invocation: &Invocation) -> Result<String, String> {
+        let program = invocation.program.display();
+        let output = Self::command(invocation)?
             .output()
             .map_err(|e| format!("could not run `{program}`: {e}"))?;
         if output.status.success() {
@@ -1148,6 +1160,26 @@ mod tests {
                 dir.path().join("b").display()
             )),
             "got {out}"
+        );
+    }
+
+    /// A git hook running the build sets `GIT_DIR` to the real repository;
+    /// a tool's git must find the checkout's repository instead.
+    #[test]
+    fn the_process_runner_points_no_tool_at_another_repository() {
+        let command = ProcessRunner::command(&Invocation {
+            program: PathBuf::from("mdbook"),
+            args: vec![],
+            cwd: None,
+            path_prepend: vec![],
+        })
+        .unwrap();
+
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == "GIT_DIR" && value.is_none()),
+            "a tool inherits GIT_DIR"
         );
     }
 

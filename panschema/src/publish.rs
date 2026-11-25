@@ -1192,9 +1192,7 @@ pub fn extract_main_at_ref(
     path_in_repo: &Path,
 ) -> Result<tempfile::NamedTempFile, PublishError> {
     let spec = format!("{ref_}:{}", path_in_repo.display());
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    let output = git_in(repo_root)
         .args(["show", &spec])
         .output()
         .map_err(classify_git_spawn_error)?;
@@ -1586,9 +1584,7 @@ impl Materialized {
 /// without extracting content or holding open files.
 fn exists_at_ref(repo_root: &Path, ref_: &str, path_in_repo: &Path) -> bool {
     let spec = format!("{ref_}:{}", path_in_repo.display());
-    Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    git_in(repo_root)
         .args(["cat-file", "-e", &spec])
         .output()
         .map(|o| o.status.success())
@@ -2494,6 +2490,47 @@ pub(crate) fn run_git_capture(repo_root: &Path, args: &[&str]) -> Result<String,
     run_git_capture_env(repo_root, &[], args)
 }
 
+/// The variables that tie git to one repository: the ones `git rev-parse
+/// --local-env-vars` lists (and `GIT_INTERNAL_SUPER_PREFIX`, which git
+/// before 2.40 listed), less `GIT_CONFIG_COUNT` and
+/// `GIT_CONFIG_PARAMETERS`. Those two carry configuration, a credential or
+/// a proxy among it, and git keeps them itself when it runs in a submodule.
+const GIT_LOCATION_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
+
+/// Remove [`GIT_LOCATION_VARS`] from `command`'s environment, so git finds
+/// its repository from the directory it runs in. A git hook exports
+/// `GIT_DIR` (in a linked worktree, without `GIT_WORK_TREE`), and every
+/// process started from the hook inherits it.
+pub(crate) fn clear_git_location(command: &mut Command) {
+    for var in GIT_LOCATION_VARS {
+        command.env_remove(var);
+    }
+}
+
+/// `git -C dir`, run in the repository `dir` is in, whichever one the
+/// caller's environment names.
+fn git_in(dir: &Path) -> Command {
+    let mut git = Command::new("git");
+    clear_git_location(&mut git);
+    git.arg("-C").arg(dir);
+    git
+}
+
 /// [`run_git_capture`] with environment variables set for the one
 /// process, which is how a scratch index is handed to git.
 pub(crate) fn run_git_capture_env(
@@ -2501,9 +2538,7 @@ pub(crate) fn run_git_capture_env(
     envs: &[(&str, &std::ffi::OsStr)],
     args: &[&str],
 ) -> Result<String, std::io::Error> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    let output = git_in(repo_root)
         .envs(envs.iter().copied())
         .args(args)
         .output()?;
@@ -3724,6 +3759,42 @@ current = "v0.1.0"
         run(path, &["commit", "-m", "WIP", "--quiet"]);
 
         tmp
+    }
+
+    /// A git hook exports the repository it runs for, and panschema's git
+    /// must find its repository from the directory it is run in. The two
+    /// configuration variables stay: they carry a credential or a proxy
+    /// that fetching a pinned plugin needs.
+    #[test]
+    fn git_runs_without_the_variables_that_name_a_repository_and_keeps_its_configuration() {
+        let git = git_in(Path::new("sub"));
+
+        let removed: Vec<&str> = git
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            removed,
+            [
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                "GIT_COMMON_DIR",
+                "GIT_CONFIG",
+                "GIT_DIR",
+                "GIT_GRAFT_FILE",
+                "GIT_IMPLICIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_INTERNAL_SUPER_PREFIX",
+                "GIT_NO_REPLACE_OBJECTS",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_PREFIX",
+                "GIT_REPLACE_REF_BASE",
+                "GIT_SHALLOW_FILE",
+                "GIT_WORK_TREE",
+            ],
+            "every variable `git rev-parse --local-env-vars` lists, less GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS"
+        );
+        assert_eq!(git.get_args().collect::<Vec<_>>(), ["-C", "sub"]);
     }
 
     /// An empty repo on `main` with its own identity, so commits never

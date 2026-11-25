@@ -211,6 +211,19 @@ working tree.
   `.gitattributes` marks `export-ignore`, which repos do to keep their
   docs out of source tarballs, and it holds the whole tree in memory
   before unpacking.
+- The checkout's top is made an empty repository (`git init`), because a
+  preprocessor may find the repository root by its `.git`: mdbook-listings
+  shows a listing's source from there, and without one it showed the
+  book-relative path. Empty rather than a `gitdir:` link to the real
+  repository, so a plugin running git cannot reach the real index. The
+  init and every tool the build runs (installs, mdbook, its plugins) run
+  with `GIT_DIR` and its siblings removed, since a hook running the build
+  sets them to the real repository. panschema's own git calls drop them
+  too: a hook in a linked worktree exports `GIT_DIR` without
+  `GIT_WORK_TREE`, and git would take a spec's subdirectory for the top
+  of the work tree. `GIT_CONFIG_COUNT` and `GIT_CONFIG_PARAMETERS` are
+  kept, as git keeps them for a submodule: they carry the credential or
+  proxy an install from a git URL needs.
 - A book that declares more than one `[output.*]` backend renders its
   HTML into `html/` under mdbook's destination, so the HTML root is read
   from the tag's `book.toml`, not assumed.

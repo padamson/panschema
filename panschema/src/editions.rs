@@ -671,9 +671,10 @@ fn tool_error(
 }
 
 /// Check the tree of `commit` out under `dest` through a scratch index,
-/// leaving the repo's own index and working tree alone. (`git archive`
-/// would drop every path a `.gitattributes` marks `export-ignore`, which
-/// repos do to keep their docs out of source tarballs.)
+/// leaving the repo's own index and working tree alone, and make `dest` a
+/// repository root of its own. (`git archive` would drop every path a
+/// `.gitattributes` marks `export-ignore`, which repos do to keep their
+/// docs out of source tarballs.)
 fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
     let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
     let index = scratch.path().join("index");
@@ -689,6 +690,17 @@ fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
     // whole prefix at once, under a parent that is not there. The prefix
     // must also end in a separator, or git takes it as a filename prefix.
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    // An empty repository, not a link to the real one, so a book's tools
+    // that find the repository root by its `.git` (mdbook-listings, for a
+    // listing's source path) find the checkout's top and nothing more.
+    let init = toolchain::Invocation {
+        program: "git".into(),
+        args: vec!["init".into(), "--quiet".into(), "--template=".into()],
+        cwd: Some(dest.to_path_buf()),
+        path_prepend: vec![],
+    };
+    toolchain::Runner::run(&toolchain::ProcessRunner, &init)
+        .map_err(|e| format!("could not make the checkout a repository: {e}"))?;
     let dest = dest.to_string_lossy();
     let prefix = format!(
         "--prefix={}/",
@@ -1533,6 +1545,22 @@ mod build_tests {
         installs: RefCell<Vec<(String, Vec<String>)>>,
         /// The pins each build was given, in build order.
         builds: RefCell<Vec<ToolchainPins>>,
+        /// The repository each build saw above its book; `None` when no
+        /// directory above the book holds a `.git`.
+        repositories: RefCell<Vec<Option<SeenRepository>>>,
+    }
+
+    /// What a tool run in a book finds when it looks for the repository.
+    #[derive(Debug, PartialEq)]
+    struct SeenRepository {
+        /// The book's path from the nearest directory above it holding a
+        /// `.git`, the search mdbook-listings makes for its provenance
+        /// paths.
+        book: PathBuf,
+        /// Where git, run in that directory, keeps the repository: `.git`
+        /// for its own, a path elsewhere for a link to another.
+        git_dir: String,
+        has_commits: bool,
     }
 
     impl Toolchain for FakeToolchain {
@@ -1573,6 +1601,22 @@ mod build_tests {
             dest: &Path,
         ) -> Result<PathBuf, ToolError> {
             self.builds.borrow_mut().push(pins.clone());
+            self.repositories.borrow_mut().push(
+                book_dir
+                    .ancestors()
+                    .find(|dir| dir.join(".git").exists())
+                    .map(|root| SeenRepository {
+                        book: book_dir.strip_prefix(root).unwrap().to_path_buf(),
+                        git_dir: git_out(root, &["rev-parse", "--git-dir"])
+                            .trim()
+                            .to_string(),
+                        has_commits: crate::publish::run_git_capture(
+                            root,
+                            &["rev-parse", "--verify", "--quiet", "HEAD"],
+                        )
+                        .is_ok(),
+                    }),
+            );
             render(&book_dir.join("src"), dest).map_err(|output| ToolError::Run { output })?;
             // As mdbook does, the additional assets land beside the pages.
             for entry in fs::read_dir(book_dir).unwrap() {
@@ -2256,6 +2300,40 @@ mod build_tests {
         assert_eq!(
             body(repo.path().join("sub/site/book/1/chapter.html")),
             "nested"
+        );
+    }
+
+    /// A book's preprocessors find the repository root by its `.git`, as
+    /// mdbook-listings does to show a listing's source from the repo root,
+    /// so the checkout's top answers as the repository even when the spec
+    /// sits below it. The repository is the checkout's own and empty, so
+    /// no tool reaches the real one's index or refs through it.
+    #[test]
+    fn the_checkout_is_an_empty_repository_of_its_own_to_the_build() {
+        let repo = init_repo();
+        commit(
+            repo.path(),
+            &[
+                ("sub/book/book.toml", "[book]\n"),
+                ("sub/book/src/chapter.md", "nested"),
+            ],
+            Some("v0.1.0"),
+        );
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+            &edition("1", "book", "v0.1.0"),
+        );
+        let toolchain = FakeToolchain::default();
+
+        build_editions(&repo.path().join("sub"), &cfg, &toolchain).unwrap();
+
+        assert_eq!(
+            *toolchain.repositories.borrow(),
+            [Some(SeenRepository {
+                book: PathBuf::from("sub").join("book"),
+                git_dir: ".git".to_string(),
+                has_commits: false,
+            })]
         );
     }
 
