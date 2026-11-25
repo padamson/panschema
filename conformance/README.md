@@ -120,6 +120,55 @@ identifier having no IRI in the instance model, projecting as a blank node,
 and being named in a finding by its place in the data, and behind `verify`
 reporting a key on a dict of such records.
 
+```bash
+uv run --project conformance conformance/probe_metamodel_extension.py
+```
+
+The metamodel-extension probe spells one count-bound declaration on a
+slot every way LinkML offers for a tool's own meaning: an annotation
+(bare, under a declared prefix, under an undeclared one), an extension,
+`instantiates:` a metaclass with the fields as annotation tags or as one
+structured value (the metaclass imported, not imported, or undefined),
+and a bare metaslot key. It gives each a typo'd or missing field,
+declares each on the slot and in a class's `slot_usage`, and reports
+each tool's output as its difference from a control schema with no
+declaration. A bare metaslot key is refused by the loader,
+`linkml-lint`, `linkml-validate`, and every generator. Every other
+spelling loads, and `induced_slot` hands it to a subclass from
+`slot_usage`. Nothing checks a value: the loader, `linkml-lint`, and
+`linkml-validate` against the metamodel accept a typo'd field, a
+missing required field, and a metaclass that is not imported or does
+not exist, and the `InstantiatesValidationPlugin` finds nothing (it is
+off by default, and its source reads `instantiates` on classes only).
+`gen-json-schema` emits nothing for any spelling, and `gen-owl` and
+`gen-shacl --include-annotations` emit nothing for an extension. An
+annotation reaches `gen-owl` as a property in the consumer schema's
+namespace when its tag is bare, under its own prefix when that prefix
+is declared, and not at all when it is not. `gen-shacl` puts a bare tag
+in predicate position as a literal, which RDF does not allow, and an
+undeclared prefix as an IRI whose scheme is the prefix. Both write a
+structured value as the Python repr of the object. A value does fail
+`linkml-validate` when it is validated as data against the metaclass.
+It is the evidence behind the spelling of schema-declared slot
+semantics. `gen-owl` and `gen-shacl` fetch from `w3id.org`, so run it
+with network access.
+
+Run it against LinkML's `main` (at 2026-11-25, `eff06809d4`) to see
+what the next release changes:
+
+```bash
+uv run --no-project --python 3.12 \
+  --with "linkml-runtime @ git+https://github.com/linkml/linkml@main#subdirectory=packages/linkml_runtime" \
+  --with "linkml @ git+https://github.com/linkml/linkml@main#subdirectory=packages/linkml" \
+  python conformance/probe_metamodel_extension.py
+```
+
+At `eff06809d4` every verdict matches 1.12.1 but one: in the flat
+`instantiates:` form with the metaclass imported, `gen-owl` and
+`gen-shacl` write each field under the IRI of the metaclass slot that
+declares it (`pm:counted_slot`), from linkml/linkml#4157. Nothing checks
+a value there either.
+
 Load an arbitrary schema through the reference implementation:
 
 ```bash
