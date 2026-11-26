@@ -30,7 +30,7 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-deny
           fallback: none
@@ -106,7 +106,7 @@ jobs:
             ${{ steps.image.outputs.os }}-cargo-mutants-
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-nextest
           fallback: none
@@ -117,7 +117,7 @@ jobs:
       # --force); the action handles the already-installed case and is
       # much faster than building from source.
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-mutants
           fallback: none
@@ -192,7 +192,7 @@ jobs:
             ${{ steps.image.outputs.os }}-cargo-mutants-
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-nextest
           fallback: none
@@ -203,7 +203,7 @@ jobs:
       # --force); the action handles the already-installed case and is
       # much faster than building from source.
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-mutants
           fallback: none
