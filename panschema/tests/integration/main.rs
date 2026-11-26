@@ -8449,6 +8449,7 @@ fn mdbook_panschema_prints_the_authoring_book_and_exits_2_when_it_cannot_run() {
         &["install"][..],
         &["editions"][..],
         &["editions", "--authoring"][..],
+        &["editions", "--edge-from-worktree"][..],
     ] {
         let out = run(args);
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -8488,5 +8489,13 @@ fn mdbook_panschema_prints_the_authoring_book_and_exits_2_when_it_cannot_run() {
         String::from_utf8(out.stdout).expect("utf-8 path"),
         format!("{}\n", book.display()),
         "stdout is the path alone, in the platform's spelling"
+    );
+
+    let out = run(&["editions", "--authoring", "--edge-from-worktree"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), COULD_NOT_RUN, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("--edge-from-worktree") && stderr.contains("Usage:"),
+        "--authoring builds nothing, so the flags are refused together; stderr:\n{stderr}"
     );
 }

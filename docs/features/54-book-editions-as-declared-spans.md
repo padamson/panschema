@@ -249,6 +249,34 @@ start a new edition.
 
 ---
 
+### Slice 5: Previewing the editions from the working tree
+
+**Status:** Completed
+
+**User Value:** An author's dev loop serves the site as it will publish,
+switcher and schema links included, while the book is still being edited.
+A plain `mdbook build` of the authoring edition renders no switcher, and
+its schema link points at a path that does not exist under `book/<id>/`.
+
+**Acceptance Criteria:**
+- [x] `mdbook-panschema editions --edge-from-worktree` builds every edition
+  from the working tree: an uncommitted edit to any edition is in its
+  pages and in the root copy, a file not yet added is built, and a deleted
+  or ignored file is not, as in a commit of everything.
+- [x] Each edition gets the toolbar it gets from the edge, with the editions
+  the switcher offers.
+- [x] The edge must be named but need not resolve, as for `panschema
+  publish --edge-from-worktree`.
+- [x] The working tree is left byte for byte as it was, so a watcher on the
+  books does not loop.
+- [x] `--edge-from-worktree` with `--authoring` is refused, exiting 2.
+- [x] README and CHANGELOG cover the flag.
+- [x] Dogfood: a consumer's dev loop runs it with `panschema publish
+  --edge-from-worktree`, and its non-current edition shows the switcher
+  and a schema link that resolves.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -257,6 +285,7 @@ start a new edition.
 | Slice 2: Toolbar | Must Have | Slice 1 | Completed |
 | Slice 3: Authoring edition | Should Have | Slice 1 | Completed |
 | Slice 4: Integration and docs | Must Have | Slices 1, 2 | Completed |
+| Slice 5: Working-tree preview | Should Have | Slice 1 | Completed |
 
 ---
 

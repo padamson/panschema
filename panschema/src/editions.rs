@@ -369,6 +369,8 @@ pub enum EditionsError {
     MissingEditions,
     #[error("could not read the tree at `{reference}`: {message}")]
     Extract { reference: String, message: String },
+    #[error("could not copy the working tree: {0}")]
+    WorkingTree(String),
     #[error("edition `{edition}`: there is no `book.toml` in `{}` at the edge", book.display())]
     NoBook { edition: String, book: PathBuf },
     #[error("edition `{edition}`: there is no `book.toml` in `{}`", book.display())]
@@ -446,6 +448,22 @@ pub fn build_editions(
     cfg: &PublishConfig,
     toolchain: &dyn Toolchain,
 ) -> Result<EditionsReport, EditionsError> {
+    build(spec_dir, cfg, toolchain, false)
+}
+
+/// [`build_editions`], or with `edge_from_worktree` the working tree in
+/// place of the edge ref's tree: every edition builds from what a commit
+/// of everything would hold, untracked files included and ignored ones
+/// left out, staged in a scratch index and object store and checked out
+/// in a scratch directory, so neither the working tree nor the index is
+/// touched. The edge must be named, since the last edition describes
+/// it, but need not resolve.
+fn build(
+    spec_dir: &Path,
+    cfg: &PublishConfig,
+    toolchain: &dyn Toolchain,
+    edge_from_worktree: bool,
+) -> Result<EditionsReport, EditionsError> {
     let editions_cfg = cfg
         .editions
         .as_ref()
@@ -492,14 +510,23 @@ pub fn build_editions(
             Ok(in_repo)
         })
         .collect::<Result<_, _>>()?;
-    let commits = crate::publish::resolve_refs(spec_dir, &[plan.edge.as_str()])?;
-
     let scratch = tempfile::tempdir().map_err(EditionsError::Scratch)?;
     let tree = scratch.path().join("tree");
-    extract_tree(&top, &commits[&plan.edge], &tree).map_err(|message| EditionsError::Extract {
-        reference: plan.edge.clone(),
-        message,
-    })?;
+    if edge_from_worktree {
+        // The site is the build's own output: staging it would hash the
+        // last run's into the checkout every later run builds from.
+        let site = site_in_repo(&prefix, &editions_cfg.output_dir);
+        extract_working_tree(&top, site.as_deref(), scratch.path(), &tree)
+            .map_err(EditionsError::WorkingTree)?;
+    } else {
+        let commits = crate::publish::resolve_refs(spec_dir, &[plan.edge.as_str()])?;
+        extract_tree(&top, &commits[&plan.edge], scratch.path(), &tree).map_err(|message| {
+            EditionsError::Extract {
+                reference: plan.edge.clone(),
+                message,
+            }
+        })?;
+    }
     for (edition, book) in plan.editions.iter().zip(&books) {
         if !tree.join(book).join("book.toml").is_file() {
             return Err(EditionsError::NoBook {
@@ -555,8 +582,23 @@ pub fn build_editions(
 /// edition it declares with `toolchain`. What `mdbook-panschema editions`
 /// runs.
 pub fn run(dir: &Path, toolchain: &dyn Toolchain) -> anyhow::Result<EditionsReport> {
+    run_with(dir, toolchain, false)
+}
+
+/// [`run`], or with `edge_from_worktree` every edition built from the
+/// working tree in place of the edge ref's tree: what a commit of
+/// everything would hold, untracked files included and ignored ones left
+/// out, with neither the working tree nor the index touched. The edge
+/// must be named but need not resolve. What `mdbook-panschema editions
+/// [--edge-from-worktree]` runs, for a dev loop to preview the site as it
+/// will publish.
+pub fn run_with(
+    dir: &Path,
+    toolchain: &dyn Toolchain,
+    edge_from_worktree: bool,
+) -> anyhow::Result<EditionsReport> {
     let (spec_dir, cfg) = crate::mdbook::read_publish_spec(dir)?;
-    Ok(build_editions(&spec_dir, &cfg, toolchain)?)
+    Ok(build(&spec_dir, &cfg, toolchain, edge_from_worktree)?)
 }
 
 /// Find `panschema-publish.toml` at or above `dir` and return the book
@@ -670,19 +712,130 @@ fn tool_error(
     }
 }
 
-/// Check the tree of `commit` out under `dest` through a scratch index,
-/// leaving the repo's own index and working tree alone, and make `dest` a
-/// repository root of its own. (`git archive` would drop every path a
-/// `.gitattributes` marks `export-ignore`, which repos do to keep their
-/// docs out of source tarballs.)
-fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
-    let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let index = scratch.path().join("index");
-    let env = [("GIT_INDEX_FILE", index.as_os_str())];
-    let git = |args: &[&str]| {
-        crate::publish::run_git_capture_env(repo, &env, args).map_err(|e| e.to_string())
+/// Check the tree of `commit` out under `dest` through a scratch index in
+/// `scratch`, leaving the repo's own index and working tree alone, and make
+/// `dest` a repository root of its own. (`git archive` would drop every
+/// path a `.gitattributes` marks `export-ignore`, which repos do to keep
+/// their docs out of source tarballs.)
+fn extract_tree(repo: &Path, commit: &str, scratch: &Path, dest: &Path) -> Result<(), String> {
+    let git = ScratchGit::index(scratch);
+    git.run(repo, &["read-tree", commit])?;
+    check_out_index(repo, &git, dest)
+}
+
+/// Check out under `dest` what a commit of everything in `repo`'s working
+/// tree would hold, leaving out `exclude` (a path from the repo's top), as
+/// [`extract_tree`] checks out a commit. The repo's index is copied to a
+/// scratch one and the working tree staged there, into a scratch object
+/// store that borrows the repo's objects, so neither the real index nor
+/// the object store is written. Starting from the real index keeps the
+/// files a sparse checkout leaves off the disk.
+fn extract_working_tree(
+    repo: &Path,
+    exclude: Option<&str>,
+    scratch: &Path,
+    dest: &Path,
+) -> Result<(), String> {
+    let paths = crate::publish::run_git_capture(
+        repo,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "index",
+            "--git-path",
+            "objects",
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    let mut lines = paths.lines().map(PathBuf::from);
+    let (Some(real_index), Some(real_objects)) = (lines.next(), lines.next()) else {
+        return Err(format!(
+            "git did not name the index and object store: {paths}"
+        ));
     };
-    git(&["read-tree", commit])?;
+    let git = ScratchGit::index_and_objects(scratch, &real_objects).map_err(|e| e.to_string())?;
+    // A repository nothing was ever added to has no index yet.
+    if real_index.is_file() {
+        std::fs::copy(&real_index, &git.index).map_err(|e| e.to_string())?;
+    }
+    // git refuses a pathspec naming an ignored path, even to exclude it,
+    // and `add` leaves an ignored one out anyway.
+    let exclude = exclude
+        .filter(|path| {
+            crate::publish::run_git_capture(repo, &["check-ignore", "-q", path]).is_err()
+        })
+        .map(|path| format!(":(exclude,literal){path}"));
+    let mut add = vec!["add", "--all", "--", "."];
+    add.extend(exclude.as_deref());
+    git.run(repo, &add)?;
+    check_out_index(repo, &git, dest)
+}
+
+/// The site as a `/`-separated path from the repository's top, or `None`
+/// when it is the top itself or lies outside it, either of which no
+/// pathspec can leave out.
+fn site_in_repo(prefix: &str, output_dir: &Path) -> Option<String> {
+    let site = Path::new(prefix).join(output_dir);
+    if crate::publish::climbs_out(&site) {
+        return None;
+    }
+    let parts: Vec<_> = crate::publish::lexical_components(&site)
+        .iter()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// git run against a scratch index, and for a working-tree build a scratch
+/// object store that reads the repository's objects as alternates.
+struct ScratchGit {
+    index: PathBuf,
+    vars: Vec<(&'static str, std::ffi::OsString)>,
+    /// Whether the index came from the repository's, where a sparse
+    /// checkout marks the files it leaves off the disk.
+    from_real_index: bool,
+}
+
+impl ScratchGit {
+    fn index(scratch: &Path) -> Self {
+        let index = scratch.join("index");
+        let vars = vec![("GIT_INDEX_FILE", index.clone().into_os_string())];
+        Self {
+            index,
+            vars,
+            from_real_index: false,
+        }
+    }
+
+    /// The alternate goes in the store's own `info/alternates`, one path to
+    /// a line: the environment variable splits on `:`, which a repository's
+    /// path may hold.
+    fn index_and_objects(scratch: &Path, real_objects: &Path) -> std::io::Result<Self> {
+        let objects = scratch.join("objects");
+        std::fs::create_dir_all(objects.join("info"))?;
+        std::fs::write(
+            objects.join("info").join("alternates"),
+            format!("{}\n", real_objects.display()),
+        )?;
+        let mut git = Self::index(scratch);
+        git.vars
+            .push(("GIT_OBJECT_DIRECTORY", objects.into_os_string()));
+        git.from_real_index = true;
+        Ok(git)
+    }
+
+    fn run(&self, repo: &Path, args: &[&str]) -> Result<String, String> {
+        let vars: Vec<(&str, &std::ffi::OsStr)> =
+            self.vars.iter().map(|(k, v)| (*k, v.as_os_str())).collect();
+        crate::publish::run_git_capture_env(repo, &vars, args).map_err(|e| e.to_string())
+    }
+}
+
+/// Write every file `git`'s index holds under `dest`, whatever the sparse
+/// checkout leaves off the disk included, and make `dest` a repository
+/// root of its own.
+fn check_out_index(repo: &Path, git: &ScratchGit, dest: &Path) -> Result<(), String> {
     // git creates each file's leading directories by walking the `/`
     // separators in its path, so the checkout directory has to exist
     // first and the prefix has to be spelled with `/`: on Windows the
@@ -690,17 +843,7 @@ fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
     // whole prefix at once, under a parent that is not there. The prefix
     // must also end in a separator, or git takes it as a filename prefix.
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    // An empty repository, not a link to the real one, so a book's tools
-    // that find the repository root by its `.git` (mdbook-listings, for a
-    // listing's source path) find the checkout's top and nothing more.
-    let init = toolchain::Invocation {
-        program: "git".into(),
-        args: vec!["init".into(), "--quiet".into(), "--template=".into()],
-        cwd: Some(dest.to_path_buf()),
-        path_prepend: vec![],
-    };
-    toolchain::Runner::run(&toolchain::ProcessRunner, &init)
-        .map_err(|e| format!("could not make the checkout a repository: {e}"))?;
+    make_repository_root(dest)?;
     let dest = dest.to_string_lossy();
     let prefix = format!(
         "--prefix={}/",
@@ -710,8 +853,28 @@ fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
             dest.into_owned()
         }
     );
-    git(&["checkout-index", "--all", &prefix])?;
+    let mut checkout = vec!["checkout-index", "--all", &prefix];
+    if git.from_real_index {
+        checkout.push("--ignore-skip-worktree-bits");
+    }
+    git.run(repo, &checkout)?;
     Ok(())
+}
+
+/// Make `dest` an empty repository, not a link to the real one, so a
+/// book's tools that find the repository root by its `.git`
+/// (mdbook-listings, for a listing's source path) find the checkout's top
+/// and nothing more.
+fn make_repository_root(dest: &Path) -> Result<(), String> {
+    let init = toolchain::Invocation {
+        program: "git".into(),
+        args: vec!["init".into(), "--quiet".into(), "--template=".into()],
+        cwd: Some(dest.to_path_buf()),
+        path_prepend: vec![],
+    };
+    toolchain::Runner::run(&toolchain::ProcessRunner, &init)
+        .map(|_| ())
+        .map_err(|e| format!("could not make the checkout a repository: {e}"))
 }
 
 /// Percent-encode one URL path segment, leaving raw exactly the
@@ -1004,6 +1167,25 @@ mod tests {
 
     fn id_of<'a>(plan: &'a EditionPlan, version: &str) -> Option<&'a str> {
         plan.edition_of(version).map(|e| e.id.as_str())
+    }
+
+    #[test]
+    fn the_site_is_left_out_by_its_path_from_the_top_unless_it_is_the_top_or_outside() {
+        for (prefix, output_dir, expected) in [
+            ("", "site", Some("site")),
+            ("sub/", "site", Some("sub/site")),
+            ("sub/", "./out/../site", Some("sub/site")),
+            ("sub/", "..", None),
+            ("", ".", None),
+            ("", "../site", None),
+            ("sub/", "../../site", None),
+        ] {
+            assert_eq!(
+                site_in_repo(prefix, Path::new(output_dir)).as_deref(),
+                expected,
+                "prefix `{prefix}`, output_dir `{output_dir}`"
+            );
+        }
     }
 
     #[test]
@@ -1548,6 +1730,8 @@ mod build_tests {
         /// The repository each build saw above its book; `None` when no
         /// directory above the book holds a `.git`.
         repositories: RefCell<Vec<Option<SeenRepository>>>,
+        /// Every file of the checkout each build saw, `.git` aside.
+        checkouts: RefCell<Vec<Vec<PathBuf>>>,
     }
 
     /// What a tool run in a book finds when it looks for the repository.
@@ -1601,22 +1785,23 @@ mod build_tests {
             dest: &Path,
         ) -> Result<PathBuf, ToolError> {
             self.builds.borrow_mut().push(pins.clone());
-            self.repositories.borrow_mut().push(
-                book_dir
-                    .ancestors()
-                    .find(|dir| dir.join(".git").exists())
-                    .map(|root| SeenRepository {
-                        book: book_dir.strip_prefix(root).unwrap().to_path_buf(),
-                        git_dir: git_out(root, &["rev-parse", "--git-dir"])
-                            .trim()
-                            .to_string(),
-                        has_commits: crate::publish::run_git_capture(
-                            root,
-                            &["rev-parse", "--verify", "--quiet", "HEAD"],
-                        )
-                        .is_ok(),
-                    }),
-            );
+            let root = book_dir.ancestors().find(|dir| dir.join(".git").exists());
+            if let Some(root) = root {
+                self.checkouts.borrow_mut().push(files(root));
+            }
+            self.repositories.borrow_mut().push(root.map(|root| {
+                SeenRepository {
+                    book: book_dir.strip_prefix(root).unwrap().to_path_buf(),
+                    git_dir: git_out(root, &["rev-parse", "--git-dir"])
+                        .trim()
+                        .to_string(),
+                    has_commits: crate::publish::run_git_capture(
+                        root,
+                        &["rev-parse", "--verify", "--quiet", "HEAD"],
+                    )
+                    .is_ok(),
+                }
+            }));
             render(&book_dir.join("src"), dest).map_err(|output| ToolError::Run { output })?;
             // As mdbook does, the additional assets land beside the pages.
             for entry in fs::read_dir(book_dir).unwrap() {
@@ -1773,6 +1958,36 @@ mod build_tests {
         crate::publish::run_git_capture(repo, args).unwrap()
     }
 
+    /// Every file under `dir` by relative path, `.git` aside.
+    fn files(dir: &Path) -> Vec<PathBuf> {
+        fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.file_name().is_some_and(|name| name == ".git") {
+                    continue;
+                }
+                if path.is_dir() {
+                    walk(root, &path, out);
+                } else {
+                    out.push(path.strip_prefix(root).unwrap().to_path_buf());
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, dir, &mut out);
+        out.sort();
+        out
+    }
+
+    /// The editions built from the working tree.
+    fn build_from_worktree(
+        spec_dir: &Path,
+        cfg: &PublishConfig,
+        toolchain: &dyn Toolchain,
+    ) -> Result<EditionsReport, EditionsError> {
+        build(spec_dir, cfg, toolchain, true)
+    }
+
     /// Every file under `dir`, by relative path.
     fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) {
@@ -1854,6 +2069,151 @@ mod build_tests {
         let book = repo.path().join("site/book");
         assert_eq!(body(book.join("1/chapter.html")), "first");
         assert_eq!(body(book.join("2/chapter.html")), "second");
+    }
+
+    /// A dev loop previews the site as it will publish: every edition and
+    /// the root copy read the working tree.
+    #[test]
+    fn from_the_working_tree_every_edition_reads_its_uncommitted_edits() {
+        let repo = book_repo();
+        let p = repo.path();
+        fs::write(p.join("book/1/src/chapter.md"), "first, edited").unwrap();
+        fs::write(p.join("book/2/src/chapter.md"), "second, edited").unwrap();
+
+        build_from_worktree(p, &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        assert_eq!(body(p.join("site/book/1/chapter.html")), "first, edited");
+        assert_eq!(body(p.join("site/book/2/chapter.html")), "second, edited");
+        assert_eq!(body(p.join("site/chapter.html")), "second, edited");
+        let js = read(p.join("site/book/1/schema-link.js"));
+        let context = crate::mdbook::baked_json(&js, "editions");
+        let switcher: Vec<&serde_json::Value> = context["editions"]
+            .as_array()
+            .map(|editions| editions.iter().map(|e| &e["id"]).collect())
+            .unwrap_or_default();
+        assert_eq!(
+            (&context["own"], switcher),
+            (&"1".into(), vec![&"2".into(), &"1".into()]),
+            "edition 1's switcher offers both editions; got {context}"
+        );
+    }
+
+    /// The preview holds what committing everything would publish.
+    #[test]
+    fn from_the_working_tree_an_untracked_file_is_built_and_a_deleted_or_ignored_one_is_not() {
+        let repo = book_repo();
+        let p = repo.path();
+        fs::write(p.join("book/2/src/new.md"), "not yet added").unwrap();
+        fs::remove_file(p.join("book/2/src/extra.md")).unwrap();
+        fs::write(p.join(".gitignore"), "site/\nnotes.md\n").unwrap();
+        fs::write(p.join("book/2/src/notes.md"), "ignored").unwrap();
+
+        build_from_worktree(p, &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        let book = p.join("site/book/2");
+        let pages: Vec<PathBuf> = snapshot(&book)
+            .into_keys()
+            .filter(|page| page.extension().is_some_and(|ext| ext == "html"))
+            .collect();
+        assert_eq!(
+            pages,
+            ["chapter.html", "new.html", "part/page.html"].map(PathBuf::from)
+        );
+        assert_eq!(body(book.join("new.html")), "not yet added");
+    }
+
+    /// A sparse checkout leaves files off the disk that a commit still
+    /// holds.
+    #[test]
+    fn from_the_working_tree_a_file_off_the_disk_by_skip_worktree_is_built() {
+        let repo = book_repo();
+        let p = repo.path();
+        git(
+            p,
+            &["update-index", "--skip-worktree", "book/2/src/extra.md"],
+        );
+        fs::remove_file(p.join("book/2/src/extra.md")).unwrap();
+
+        build_from_worktree(p, &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        assert_eq!(body(p.join("site/book/2/extra.html")), "only in the second");
+    }
+
+    /// The site is the build's own output: the last run's, untracked, is
+    /// never in the next run's tree, ignored or not, wherever the spec sits.
+    #[test]
+    fn from_the_working_tree_the_site_is_left_out_of_the_tree() {
+        let repo = init_repo();
+        let p = repo.path();
+        commit(
+            p,
+            &[
+                ("sub/book/book.toml", "[book]\n"),
+                ("sub/book/src/chapter.md", "nested"),
+            ],
+            Some("v0.1.0"),
+        );
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+            &edition("1", "book", "v0.1.0"),
+        );
+        build_from_worktree(&p.join("sub"), &cfg, &FakeToolchain::default()).unwrap();
+        assert!(
+            p.join("sub/site/book/1/chapter.html").is_file(),
+            "the first run writes the site the second must leave out"
+        );
+
+        let toolchain = FakeToolchain::default();
+        build_from_worktree(&p.join("sub"), &cfg, &toolchain).unwrap();
+
+        let checkouts = toolchain.checkouts.borrow();
+        let files = &checkouts[0];
+        assert!(
+            files.contains(&PathBuf::from("sub/book/src/chapter.md"))
+                && !files.iter().any(|file| file.starts_with("sub/site")),
+            "the checkout holds the book and no site: {files:?}"
+        );
+    }
+
+    #[test]
+    fn from_the_working_tree_the_edge_need_not_name_a_ref() {
+        let repo = book_repo();
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\", \"v0.1.1\", \"v0.2.0\"]\n\
+             edge = \"not-pushed-yet\"\ncurrent = \"v0.2.0\"",
+            EDITIONS,
+        );
+
+        build_from_worktree(repo.path(), &cfg, &FakeToolchain::default()).unwrap();
+
+        assert_eq!(body(repo.path().join("site/book/2/chapter.html")), "second");
+    }
+
+    /// A watcher on the books would loop if the build rewrote one.
+    #[test]
+    fn from_the_working_tree_the_working_tree_is_untouched() {
+        let repo = book_repo();
+        let p = repo.path();
+        fs::write(p.join("book/2/src/chapter.md"), "edited").unwrap();
+        fs::write(p.join("book/2/src/new.md"), "not yet added").unwrap();
+        let books = snapshot(&p.join("book"));
+        let status = git_out(p, &["status", "--porcelain"]);
+        let objects = git_out(p, &["count-objects"]);
+
+        build_from_worktree(
+            p,
+            &spec("v0.2.0", "[book_link]\nenabled = true\n"),
+            &FakeToolchain::default(),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot(&p.join("book")), books);
+        assert_eq!(git_out(p, &["status", "--porcelain"]), status);
+        assert_eq!(
+            git_out(p, &["count-objects"]),
+            objects,
+            "staging writes nothing into the repository's object store"
+        );
     }
 
     #[test]
@@ -2372,10 +2732,15 @@ mod build_tests {
         )
         .unwrap();
 
-        let report = run(&repo.path().join("book/1/src"), &FakeToolchain::default()).unwrap();
+        fs::write(repo.path().join("book/1/src/chapter.md"), "uncommitted").unwrap();
+        let dir = repo.path().join("book/1/src");
 
+        let report = run(&dir, &FakeToolchain::default()).unwrap();
         assert_eq!(report.plan.current, "1");
         assert_eq!(body(repo.path().join("site/chapter.html")), "first");
+
+        run_with(&dir, &FakeToolchain::default(), true).unwrap();
+        assert_eq!(body(repo.path().join("site/chapter.html")), "uncommitted");
     }
 
     /// A spec at `dir` declaring editions `3`, `1` and `2` in that order,

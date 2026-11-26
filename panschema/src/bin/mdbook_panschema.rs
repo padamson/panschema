@@ -48,6 +48,11 @@ enum Command {
         /// new chapters and listings go into, and build nothing.
         #[arg(long)]
         authoring: bool,
+        /// Build every edition from the working tree, uncommitted and
+        /// untracked files included, instead of the edge ref, to preview
+        /// the site beside `panschema publish --edge-from-worktree`.
+        #[arg(long = "edge-from-worktree", conflicts_with = "authoring")]
+        edge_from_worktree: bool,
     },
 }
 
@@ -83,7 +88,11 @@ fn run_command(command: Command) -> Result<()> {
             }
             Ok(())
         }
-        Command::Editions { dir, authoring } => {
+        Command::Editions {
+            dir,
+            authoring,
+            edge_from_worktree,
+        } => {
             if authoring {
                 // The path's own bytes, through a write that can fail:
                 // a script reads this line as a path, and a closed pipe
@@ -94,7 +103,8 @@ fn run_command(command: Command) -> Result<()> {
                 out.write_all(b"\n")?;
                 return Ok(());
             }
-            let report = editions::run(&dir, &InstalledToolchain::in_cache()?)?;
+            let report =
+                editions::run_with(&dir, &InstalledToolchain::in_cache()?, edge_from_worktree)?;
             for edition in &report.plan.editions {
                 println!(
                     "{}/book/{}/  from {}",

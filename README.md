@@ -485,6 +485,12 @@ mdbook-panschema editions
 
 The edge's tree is checked out through a scratch index, so the working tree is never touched (and an uncommitted edit is not published), and every edition builds before anything is written. Every page gets the toolbar asset from the running binary: a switcher listing the editions by name, a note on every page of an edition that is not the current one (it names the edition and the releases it covers), the `[book_link]` button, and a `<link rel="canonical">` to the page at its edition's stable path. For an entry aliasing `current/`, the button opens a list of every version's schema docs, the edge included, grouped by edition, with the page's own edition and the version its book describes marked (the newest release in the edition's span, or the edge for an unreleased edition). An entry naming a fixed path stays a plain link. In the other direction, `panschema publish` points each schema version's header brand at the edition that covers it (`schema/v0.1.1/` links to `book/1/`), so drop `site_root_url` from `[publishing]`: it is refused alongside `[editions]`, where it would be ignored.
 
+To preview the site as it will publish, `mdbook-panschema editions --edge-from-worktree` builds every edition from the working tree instead. Uncommitted edits and files not yet added count, and ignored or deleted files do not, as in a commit of everything. It stages the working tree in a scratch index and object store and checks it out in a scratch directory, leaving out the site itself, so neither the working tree nor your index is touched and a watcher on the books does not loop. It needs git 2.35 or later. The edge must be named but need not exist as a ref yet. Run it beside `panschema publish --edge-from-worktree` and serve the site root:
+
+```bash
+panschema publish --edge-from-worktree && mdbook-panschema editions --edge-from-worktree
+```
+
 The tools come from `PATH` unless the publish spec pins them, and the pins hold for every edition, so a tool upgrade re-renders all of them:
 
 ```toml
