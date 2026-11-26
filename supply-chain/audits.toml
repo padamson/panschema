@@ -693,6 +693,12 @@ user-id = 2915 # Amanieu d'Antras (Amanieu)
 start = "2021-01-27"
 end = "2027-05-11"
 
+[[trusted.libc]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:rust-lang/libc"
+start = "2026-10-02"
+end = "2027-11-26"
+
 [[trusted.linux-raw-sys]]
 criteria = "safe-to-deploy"
 user-id = 6825 # Dan Gohman (sunfishcode)
@@ -759,6 +765,13 @@ user-id = 146401 # Sean Linsley (seanlinsley)
 start = "2022-07-20"
 end = "2027-11-14"
 notes = "Trusted for this crate only, at safe-to-run: Sean Linsley maintains pganalyze/pg_query.rs and has published every release since 6.1.0. Releases are mostly regenerated libpg_query C from upstream Postgres, which no line-by-line audit here would honestly cover. Dev-only: the Postgres writer's DDL oracle in tests. A release by another owner still needs an audit."
+
+[[trusted.playwright-rs]]
+criteria = "safe-to-run"
+trusted-publisher = "github:padamson/playwright-rust"
+start = "2026-08-02"
+end = "2027-11-26"
+notes = "The certifier's own repository. safe-to-run: a dev-dependency that drives a browser for the e2e tests."
 
 [[trusted.prettyplease]]
 criteria = "safe-to-deploy"
@@ -873,6 +886,13 @@ criteria = "safe-to-deploy"
 user-id = 6741 # Alice Ryhl (Darksonn)
 start = "2021-10-13"
 end = "2027-05-11"
+
+[[trusted.smallvec]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:smallvec/smallvec"
+start = "2026-11-13"
+end = "2027-11-26"
+notes = "Matt Brubeck, trusted for earlier versions, is no longer an owner; from 1.16.6 releases come only through this publisher. Trusted on the certifier's call."
 
 [[trusted.socket2]]
 criteria = "safe-to-deploy"
