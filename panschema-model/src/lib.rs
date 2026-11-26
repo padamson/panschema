@@ -90,6 +90,7 @@ pub mod linkml_resolve;
 pub mod merged_schema;
 pub mod primitives;
 pub mod rules;
+pub mod validate;
 pub mod yaml_reader;
 
 use import_resolve::{LoadFailure, LoadWarning, LoadedSchema};

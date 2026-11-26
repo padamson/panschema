@@ -197,9 +197,10 @@ model crate before the CLI without anyone remembering the order.
   Its supply-chain policy stays `audit-as-crates-io = false`, the same as
   `panschema`'s: both are first-party crates, vetted as the workspace's own
   source rather than as the registry copy.
-- Deliberately not pulled, with the reason: `validate` qualifies under the
-  rule (it is conformance of instance data against the IR) and crosses
-  when a consumer wants conformance through the crate; `casing` (only the
+- Deliberately not pulled, with the reason: `validate` qualified under
+  the rule (it is conformance of instance data against the IR) and
+  crossed when a consumer wanted conformance through the crate
+  ([feature 57](57-checking-one-record.md)); `casing` (only the
   Rust and Postgres writers use it); `labels` (fetches over the network);
   `Writer` and the registry (tool-side dispatch and projection policy);
   the manifest, cache, lockfile, source, publish, server, HTML, and

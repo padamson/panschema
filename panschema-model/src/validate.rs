@@ -2052,10 +2052,9 @@ wineries:
     /// The violations of `yaml` against the depot schema, whose `Stamp`
     /// declares no identifier or key, with its `value` made required.
     fn depot_violations(yaml: &str) -> Vec<Violation> {
-        let mut schema: SchemaDefinition = serde_norway::from_str(include_str!(
-            "../../panschema-model/tests/fixtures/depot.yaml"
-        ))
-        .expect("parse schema");
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(include_str!("../tests/fixtures/depot.yaml"))
+                .expect("parse schema");
         crate::linkml_resolve::materialize_default_range(&mut schema);
         let stamp = schema.classes.get_mut("Stamp").expect("Stamp");
         stamp.attributes.get_mut("value").expect("value").required = true;
@@ -3693,7 +3692,7 @@ classes:
 
     /// The shelved shape the instance model's own tests build from, read from
     /// the same file so the two crates verify one schema.
-    const SHELVED_SCHEMA: &str = include_str!("../../panschema-model/tests/fixtures/shelved.yaml");
+    const SHELVED_SCHEMA: &str = include_str!("../tests/fixtures/shelved.yaml");
 
     const VESSEL_UNION_SCHEMA: &str = "\
 name: Estate

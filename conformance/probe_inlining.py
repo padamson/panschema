@@ -4,7 +4,7 @@ Run with `uv run --project conformance conformance/probe_inlining.py`.
 Each case is one slot declaration crossed with one authored form; the
 output is the reference implementation's verdict. panschema's `verify`
 reports the same mismatches as range-kind violations (see
-`panschema/src/validate.rs`), and reads inlined records by shape. The
+`panschema-model/src/validate.rs`), and reads inlined records by shape. The
 JSON Schema writer's tests freeze the accepted pairs (`LINKML_ACCEPTS` in
 `panschema/src/json_schema_writer.rs`); refresh them when this grid grows.
 """

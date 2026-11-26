@@ -2678,6 +2678,7 @@ name = "panschema-model"
 version = "0.6.0"
 dependencies = [
  "mutants",
+ "regex",
  "semver",
  "serde",
  "serde_norway",

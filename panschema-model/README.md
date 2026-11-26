@@ -5,7 +5,8 @@ reads and writes, as a library on its own. It carries the schema model
 (`SchemaDefinition`, `ClassDefinition`, `SlotDefinition`, and the rest of
 the LinkML metamodel panschema covers), the resolution of `is_a`, mixins,
 and `slot_usage` into a class's effective slots, the LinkML YAML reader,
-and the `Reader` trait a format reader implements.
+the `Reader` trait a format reader implements, and the checks
+`panschema verify --data` runs on instance data.
 
 It depends on no RDF, template, CLI, or async library. A tool that
 reasons over schemas takes this crate and skips the rest of panschema.

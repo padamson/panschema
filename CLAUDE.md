@@ -59,6 +59,7 @@ panschema/                        # workspace root
 │   │   ├── instances.rs          # instance model: records from LinkML data, anchor expansion, record IRIs
 │   │   ├── primitives.rs         # scalar kinds and their parsing
 │   │   ├── rules.rs              # class rules and permissible-value matching
+│   │   ├── validate.rs           # instance data against the schema: the checks `verify --data` runs
 │   │   ├── diagnostics.rs        # load, projection, and cross-graph diagnostics as values
 │   │   ├── import_resolve.rs     # `imports:` resolution + merge; returns its warnings
 │   │   └── yaml_reader.rs        # LinkML YAML → IR

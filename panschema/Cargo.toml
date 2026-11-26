@@ -55,11 +55,6 @@ toml = "1"
 toml_edit = "0.25"
 hex = "0.4"
 
-# Instance-data validation: compiling a slot's `pattern` regex to check
-# string values against it. Default features (Unicode-aware `\w`/`\d`,
-# etc.) so a schema's pattern validates with standard regex semantics.
-regex = "1"
-
 # Error handling
 thiserror = "2"
 anyhow = "1.0.103"
@@ -125,6 +120,10 @@ syn = { version = "3", features = ["full", "extra-traits"] }
 # library. Real-Postgres-oracle syntax checking with no running database;
 # a real-Postgres apply/constraint-enforcement tier is not yet built.
 pg_query = "18"
+
+# The migration-runner test matches emitted file names against the
+# runner's discovery pattern.
+regex = "1"
 
 # E2E browser testing. Tracks the crates.io release; re-pin to
 # `padamson/playwright-rust` `main` when there is pre-release work to

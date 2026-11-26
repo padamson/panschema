@@ -17,6 +17,10 @@ serde_norway = "0.9"
 thiserror = "2"
 semver = "1"
 mutants = "0.0.4"
+# A slot's `pattern`, checked against string values. Default features
+# (Unicode-aware `\w`/`\d`) so a pattern validates with standard regex
+# semantics.
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

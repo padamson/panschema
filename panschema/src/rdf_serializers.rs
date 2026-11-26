@@ -751,7 +751,7 @@ fn records_digest(set: &crate::instances::InstanceSet) -> String {
             std::iter::once(Cow::Borrowed(sv.slot.as_str())).chain(
                 sv.values
                     .iter()
-                    .map(|value| Cow::Owned(crate::validate::value_display(value))),
+                    .map(|value| Cow::Owned(crate::instances::value_display(value))),
             )
         });
         std::iter::once(Cow::Borrowed(inst.id.as_str()))
