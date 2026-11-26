@@ -132,7 +132,7 @@ pg_query = "18"
 # which asks the crate for the build its own driver expects; nothing names
 # a Playwright version, so a bump moves crate, driver, and browsers
 # together.
-playwright-rs = "0.20"
+playwright-rs = "0.21"
 # Shows the driver's warnings while `install-browsers` runs.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
