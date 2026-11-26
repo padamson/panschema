@@ -1,0 +1,164 @@
+multi, id range, unflagged           | list of ids          -> ok
+multi, id range, unflagged           | list of objects      -> {'id': 'a', 'label': 'A'} is not of type 'string' in /items/0; {'id': 'b'} is not of type 'string' in /items/1
+multi, id range, unflagged           | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'array', 'null' in /items
+multi, id range, unflagged           | one id               -> 'a' is not of type 'array', 'null' in /items
+multi, id range, unflagged           | one integer          -> 5 is not of type 'array', 'null' in /items
+multi, id range, unflagged           | one object           -> {'id': 'a', 'label': 'A'} is not of type 'array', 'null' in /items
+multi, id range, unflagged           | list of note objects -> {'text': 'x'} is not of type 'string' in /items/0
+multi, id range, unflagged           | one note object      -> {'text': 'x'} is not of type 'array', 'null' in /items
+multi, id range, unflagged           | list of keyed objects -> {'code': 'a', 'label': 'A'} is not of type 'string' in /items/0
+multi, id range, unflagged           | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'array', 'null' in /items
+
+multi, id range, inlined             | list of ids          -> ['a', 'b'] is not of type 'object', 'null' in /items
+multi, id range, inlined             | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not of type 'object', 'null' in /items
+multi, id range, inlined             | dict keyed by id     -> ok
+multi, id range, inlined             | one id               -> 'a' is not of type 'object', 'null' in /items
+multi, id range, inlined             | one integer          -> 5 is not of type 'object', 'null' in /items
+multi, id range, inlined             | one object           -> ok
+multi, id range, inlined             | list of note objects -> [{'text': 'x'}] is not of type 'object', 'null' in /items
+multi, id range, inlined             | one note object      -> ok
+multi, id range, inlined             | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not of type 'object', 'null' in /items
+multi, id range, inlined             | dict keyed by code   -> ok
+
+multi, id range, inlined_as_list     | list of ids          -> 'a' is not of type 'object' in /items/0; 'b' is not of type 'object' in /items/1
+multi, id range, inlined_as_list     | list of objects      -> ok
+multi, id range, inlined_as_list     | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'array', 'null' in /items
+multi, id range, inlined_as_list     | one id               -> 'a' is not of type 'array', 'null' in /items
+multi, id range, inlined_as_list     | one integer          -> 5 is not of type 'array', 'null' in /items
+multi, id range, inlined_as_list     | one object           -> {'id': 'a', 'label': 'A'} is not of type 'array', 'null' in /items
+multi, id range, inlined_as_list     | list of note objects -> Additional properties are not allowed ('text' was unexpected) in /items/0; 'id' is a required property in /items/0
+multi, id range, inlined_as_list     | one note object      -> {'text': 'x'} is not of type 'array', 'null' in /items
+multi, id range, inlined_as_list     | list of keyed objects -> Additional properties are not allowed ('code' was unexpected) in /items/0; 'id' is a required property in /items/0
+multi, id range, inlined_as_list     | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'array', 'null' in /items
+
+multi, id range, inlined: false      | list of ids          -> ok
+multi, id range, inlined: false      | list of objects      -> {'id': 'a', 'label': 'A'} is not of type 'string' in /items/0; {'id': 'b'} is not of type 'string' in /items/1
+multi, id range, inlined: false      | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'array', 'null' in /items
+multi, id range, inlined: false      | one id               -> 'a' is not of type 'array', 'null' in /items
+multi, id range, inlined: false      | one integer          -> 5 is not of type 'array', 'null' in /items
+multi, id range, inlined: false      | one object           -> {'id': 'a', 'label': 'A'} is not of type 'array', 'null' in /items
+multi, id range, inlined: false      | list of note objects -> {'text': 'x'} is not of type 'string' in /items/0
+multi, id range, inlined: false      | one note object      -> {'text': 'x'} is not of type 'array', 'null' in /items
+multi, id range, inlined: false      | list of keyed objects -> {'code': 'a', 'label': 'A'} is not of type 'string' in /items/0
+multi, id range, inlined: false      | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'array', 'null' in /items
+
+single, id range, unflagged          | list of ids          -> ['a', 'b'] is not of type 'string', 'null' in /items
+single, id range, unflagged          | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not of type 'string', 'null' in /items
+single, id range, unflagged          | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'string', 'null' in /items
+single, id range, unflagged          | one id               -> ok
+single, id range, unflagged          | one integer          -> 5 is not of type 'string', 'null' in /items
+single, id range, unflagged          | one object           -> {'id': 'a', 'label': 'A'} is not of type 'string', 'null' in /items
+single, id range, unflagged          | list of note objects -> [{'text': 'x'}] is not of type 'string', 'null' in /items
+single, id range, unflagged          | one note object      -> {'text': 'x'} is not of type 'string', 'null' in /items
+single, id range, unflagged          | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not of type 'string', 'null' in /items
+single, id range, unflagged          | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'string', 'null' in /items
+
+single, id range, inlined            | list of ids          -> ['a', 'b'] is not valid under any of the given schemas in /items
+single, id range, inlined            | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not valid under any of the given schemas in /i
+single, id range, inlined            | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not valid under any of the given schemas in /items
+single, id range, inlined            | one id               -> 'a' is not valid under any of the given schemas in /items
+single, id range, inlined            | one integer          -> 5 is not valid under any of the given schemas in /items
+single, id range, inlined            | one object           -> ok
+single, id range, inlined            | list of note objects -> [{'text': 'x'}] is not valid under any of the given schemas in /items
+single, id range, inlined            | one note object      -> {'text': 'x'} is not valid under any of the given schemas in /items
+single, id range, inlined            | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not valid under any of the given schemas in /items
+single, id range, inlined            | dict keyed by code   -> {'a': {'label': 'A'}} is not valid under any of the given schemas in /items
+
+single, integer id range, unflagged  | list of ids          -> ['a', 'b'] is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | one id               -> 'a' is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | one integer          -> ok
+single, integer id range, unflagged  | one object           -> {'id': 'a', 'label': 'A'} is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | list of note objects -> [{'text': 'x'}] is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | one note object      -> {'text': 'x'} is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not of type 'integer', 'null' in /items
+single, integer id range, unflagged  | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'integer', 'null' in /items
+
+multi, no-id range, unflagged        | list of ids          -> 'a' is not of type 'object' in /items/0; 'b' is not of type 'object' in /items/1
+multi, no-id range, unflagged        | list of objects      -> Additional properties are not allowed ('id', 'label' were unexpected) in /items/0; Additional properties are not allowed ('id' was unexpected) in /items/1
+multi, no-id range, unflagged        | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'array', 'null' in /items
+multi, no-id range, unflagged        | one id               -> 'a' is not of type 'array', 'null' in /items
+multi, no-id range, unflagged        | one integer          -> 5 is not of type 'array', 'null' in /items
+multi, no-id range, unflagged        | one object           -> {'id': 'a', 'label': 'A'} is not of type 'array', 'null' in /items
+multi, no-id range, unflagged        | list of note objects -> ok
+multi, no-id range, unflagged        | one note object      -> {'text': 'x'} is not of type 'array', 'null' in /items
+multi, no-id range, unflagged        | list of keyed objects -> Additional properties are not allowed ('code', 'label' were unexpected) in /items/0
+multi, no-id range, unflagged        | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'array', 'null' in /items
+
+multi, no-id range, inlined: false   | list of ids          -> 'a' is not of type 'object' in /items/0; 'b' is not of type 'object' in /items/1
+multi, no-id range, inlined: false   | list of objects      -> Additional properties are not allowed ('id', 'label' were unexpected) in /items/0; Additional properties are not allowed ('id' was unexpected) in /items/1
+multi, no-id range, inlined: false   | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'array', 'null' in /items
+multi, no-id range, inlined: false   | one id               -> 'a' is not of type 'array', 'null' in /items
+multi, no-id range, inlined: false   | one integer          -> 5 is not of type 'array', 'null' in /items
+multi, no-id range, inlined: false   | one object           -> {'id': 'a', 'label': 'A'} is not of type 'array', 'null' in /items
+multi, no-id range, inlined: false   | list of note objects -> ok
+multi, no-id range, inlined: false   | one note object      -> {'text': 'x'} is not of type 'array', 'null' in /items
+multi, no-id range, inlined: false   | list of keyed objects -> Additional properties are not allowed ('code', 'label' were unexpected) in /items/0
+multi, no-id range, inlined: false   | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'array', 'null' in /items
+
+multi, no-id range, inlined          | list of ids          -> 'a' is not of type 'object' in /items/0; 'b' is not of type 'object' in /items/1
+multi, no-id range, inlined          | list of objects      -> Additional properties are not allowed ('id', 'label' were unexpected) in /items/0; Additional properties are not allowed ('id' was unexpected) in /items/1
+multi, no-id range, inlined          | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'array', 'null' in /items
+multi, no-id range, inlined          | one id               -> 'a' is not of type 'array', 'null' in /items
+multi, no-id range, inlined          | one integer          -> 5 is not of type 'array', 'null' in /items
+multi, no-id range, inlined          | one object           -> {'id': 'a', 'label': 'A'} is not of type 'array', 'null' in /items
+multi, no-id range, inlined          | list of note objects -> ok
+multi, no-id range, inlined          | one note object      -> {'text': 'x'} is not of type 'array', 'null' in /items
+multi, no-id range, inlined          | list of keyed objects -> Additional properties are not allowed ('code', 'label' were unexpected) in /items/0
+multi, no-id range, inlined          | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'array', 'null' in /items
+
+single, no-id range, unflagged       | list of ids          -> ['a', 'b'] is not valid under any of the given schemas in /items
+single, no-id range, unflagged       | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not valid under any of the given schemas in /i
+single, no-id range, unflagged       | dict keyed by id     -> Additional properties are not allowed ('a', 'b' were unexpected) in /items
+single, no-id range, unflagged       | one id               -> 'a' is not valid under any of the given schemas in /items
+single, no-id range, unflagged       | one integer          -> 5 is not valid under any of the given schemas in /items
+single, no-id range, unflagged       | one object           -> Additional properties are not allowed ('id', 'label' were unexpected) in /items
+single, no-id range, unflagged       | list of note objects -> [{'text': 'x'}] is not valid under any of the given schemas in /items
+single, no-id range, unflagged       | one note object      -> ok
+single, no-id range, unflagged       | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not valid under any of the given schemas in /items
+single, no-id range, unflagged       | dict keyed by code   -> Additional properties are not allowed ('a' was unexpected) in /items
+
+multi, key range, unflagged          | list of ids          -> ['a', 'b'] is not of type 'object', 'null' in /items
+multi, key range, unflagged          | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not of type 'object', 'null' in /items
+multi, key range, unflagged          | dict keyed by id     -> ok
+multi, key range, unflagged          | one id               -> 'a' is not of type 'object', 'null' in /items
+multi, key range, unflagged          | one integer          -> 5 is not of type 'object', 'null' in /items
+multi, key range, unflagged          | one object           -> ok
+multi, key range, unflagged          | list of note objects -> [{'text': 'x'}] is not of type 'object', 'null' in /items
+multi, key range, unflagged          | one note object      -> ok
+multi, key range, unflagged          | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not of type 'object', 'null' in /items
+multi, key range, unflagged          | dict keyed by code   -> ok
+
+multi, key range, inlined            | list of ids          -> ['a', 'b'] is not of type 'object', 'null' in /items
+multi, key range, inlined            | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not of type 'object', 'null' in /items
+multi, key range, inlined            | dict keyed by id     -> ok
+multi, key range, inlined            | one id               -> 'a' is not of type 'object', 'null' in /items
+multi, key range, inlined            | one integer          -> 5 is not of type 'object', 'null' in /items
+multi, key range, inlined            | one object           -> ok
+multi, key range, inlined            | list of note objects -> [{'text': 'x'}] is not of type 'object', 'null' in /items
+multi, key range, inlined            | one note object      -> ok
+multi, key range, inlined            | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not of type 'object', 'null' in /items
+multi, key range, inlined            | dict keyed by code   -> ok
+
+multi, key range, inlined: false     | list of ids          -> ['a', 'b'] is not of type 'object', 'null' in /items
+multi, key range, inlined: false     | list of objects      -> [{'id': 'a', 'label': 'A'}, {'id': 'b'}] is not of type 'object', 'null' in /items
+multi, key range, inlined: false     | dict keyed by id     -> ok
+multi, key range, inlined: false     | one id               -> 'a' is not of type 'object', 'null' in /items
+multi, key range, inlined: false     | one integer          -> 5 is not of type 'object', 'null' in /items
+multi, key range, inlined: false     | one object           -> ok
+multi, key range, inlined: false     | list of note objects -> [{'text': 'x'}] is not of type 'object', 'null' in /items
+multi, key range, inlined: false     | one note object      -> ok
+multi, key range, inlined: false     | list of keyed objects -> [{'code': 'a', 'label': 'A'}] is not of type 'object', 'null' in /items
+multi, key range, inlined: false     | dict keyed by code   -> ok
+
+multi, key range, inlined_as_list    | list of ids          -> 'a' is not of type 'object' in /items/0; 'b' is not of type 'object' in /items/1
+multi, key range, inlined_as_list    | list of objects      -> Additional properties are not allowed ('id' was unexpected) in /items/0; 'code' is a required property in /items/0
+multi, key range, inlined_as_list    | dict keyed by id     -> {'a': {'label': 'A'}, 'b': {}} is not of type 'array', 'null' in /items
+multi, key range, inlined_as_list    | one id               -> 'a' is not of type 'array', 'null' in /items
+multi, key range, inlined_as_list    | one integer          -> 5 is not of type 'array', 'null' in /items
+multi, key range, inlined_as_list    | one object           -> {'id': 'a', 'label': 'A'} is not of type 'array', 'null' in /items
+multi, key range, inlined_as_list    | list of note objects -> Additional properties are not allowed ('text' was unexpected) in /items/0; 'code' is a required property in /items/0
+multi, key range, inlined_as_list    | one note object      -> {'text': 'x'} is not of type 'array', 'null' in /items
+multi, key range, inlined_as_list    | list of keyed objects -> ok
+multi, key range, inlined_as_list    | dict keyed by code   -> {'a': {'label': 'A'}} is not of type 'array', 'null' in /items

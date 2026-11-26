@@ -1,0 +1,50 @@
+== gen-sqlddl
+   -- # Abstract Class: Entity
+   -- # Class: Stamped
+   -- # Class: Parcel
+   CREATE TABLE "Entity" (
+   CREATE INDEX "ix_Entity_id" ON "Entity" (id);
+   CREATE TABLE "Stamped" (
+   CREATE INDEX "ix_Stamped_id" ON "Stamped" (id);
+   CREATE TABLE "Parcel" (
+   CREATE INDEX "ix_Parcel_id" ON "Parcel" (id);
+== gen-shacl
+   t:Entity a sh:NodeShape ;
+   sh:targetClass t:Entity .
+   t:Parcel a sh:NodeShape ;
+   sh:targetClass t:Parcel .
+   t:Stamped a sh:NodeShape ;
+   sh:targetClass t:Stamped .
+== gen-json-schema
+   "Entity": {
+   "title": "Entity",
+   "Parcel": {
+   "title": "Parcel",
+   "Stamped": {
+   "title": "Stamped",
+== gen-pydantic
+   class Entity(ConfiguredBaseModel):
+   id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Entity']} })
+   class Stamped(ConfiguredBaseModel):
+   stamp: Optional[int] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['Stamped']} })
+   class Parcel(Stamped, Entity):
+   linkml_meta: ClassVar[LinkMLMeta] = LinkMLMeta({'from_schema': 'https://example.org/t', 'mixins': ['Stamped']})
+   name: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['Parcel']} })
+   stamp: Optional[int] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['Stamped']} })
+   id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Entity']} })
+   Entity.model_rebuild()
+   Stamped.model_rebuild()
+   Parcel.model_rebuild()
+== gen-owl
+   t:Entity a owl:Class ;
+   rdfs:label "Entity" ;
+   rdfs:subClassOf t:Parcel , _:c14n0 , _:c14n2 , _:c14n3 ;
+   t:Parcel a owl:Class ;
+   rdfs:label "Parcel" ;
+   rdfs:subClassOf t:Entity , t:Stamped , _:c14n1 , _:c14n4 , _:c14n6 ;
+   t:Stamped a owl:Class ;
+   rdfs:label "Stamped" ;
+== linkml-validate
+   Entity: exit 0, No issues found
+   Stamped: exit 0, No issues found
+   Parcel: exit 0, No issues found

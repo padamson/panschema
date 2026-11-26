@@ -5,9 +5,36 @@ validator, for settling questions about LinkML metamodel semantics
 against the reference implementation instead of arguing from the docs.
 
 This is a development tool, not part of the test suite: `cargo nextest`
-never touches it, CI does not require Python, and nothing here gates a
-merge. Run a probe when a semantics question comes up, record the verdict
-in the code or `docs/linkml-coverage.md`, and move on.
+never touches it, and the crates' gates need no Python. Run a probe when a
+semantics question comes up, record the verdict in the code or
+`docs/linkml-coverage.md`, and move on.
+
+## Snapshots
+
+`snapshots/` holds what each probe prints at the LinkML pinned in
+`uv.lock`, so a LinkML that answers a question differently shows up as a
+diff instead of waiting for someone to rerun the probe:
+
+```bash
+uv run --project conformance conformance/snapshot.py          # record every probe's output
+uv run --project conformance conformance/snapshot.py --check  # diff the probes against the record, exit 1 if any differ
+```
+
+Re-record in the same commit as a new or changed probe, and when the pin
+moves to a LinkML that changes a verdict. A probe must print the same
+thing on every run: one whose generator varies its output's order sorts
+it before printing.
+
+`.github/workflows/upstream-linkml-check.yml` runs `--check` on every PR,
+and every push to `main`, that touches `conformance/`. The check is
+required on `main`, so a Dependabot bump of the pin that changes a verdict
+waits for review instead of auto-merging. Weekly, it also runs
+it against the latest LinkML release and against LinkML's `main`, keeps one
+tracking issue for each (label `upstream-linkml`) with the diff, and closes
+it when the probes match again. It never moves the pin or a snapshot;
+Dependabot's `conformance` group moves the pin. A differing probe is run
+once more before it is reported, since several fetch from `w3id.org`, and
+`--check` exits 2, not 1, when it cannot run at all.
 
 ## Usage
 

@@ -11,6 +11,8 @@ lists a class's mixins before its `is_a` parent, in discovery order. panschema's
 (`panschema-model/src/linkml_resolve.rs`) are checked against this.
 """
 
+import sys
+
 from linkml_runtime.utils.schemaview import SchemaView
 import linkml_runtime
 
@@ -229,7 +231,7 @@ FIELDS = ("range", "required", "pattern")
 
 
 def main() -> None:
-    print("linkml-runtime", linkml_runtime.__version__)
+    print("linkml-runtime", linkml_runtime.__version__, file=sys.stderr)
     for name, case in CASES.items():
         body, slot_name = case if isinstance(case, tuple) else (case, "name")
         try:

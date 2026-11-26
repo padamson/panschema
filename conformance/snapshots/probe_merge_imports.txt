@@ -1,0 +1,26 @@
+
+-- collisions
+main vs import: Collide            unmerged=main's Collide                              merge_imports=main's Collide                              gen-linkml=main's Collide
+main vs import: Collide slots      unmerged=[]                                          merge_imports=[]                                          gen-linkml=[]
+main vs import: Color values       unmerged=['red']                                     merge_imports=['red']                                     gen-linkml=['red']
+import vs import: Deep             unmerged=deep_b's Deep                               merge_imports=deep_a's Deep                               gen-linkml=deep_a's Deep
+prefix both bind: shared           unmerged=https://example.org/main-says-shared/       merge_imports=https://example.org/main-says-shared/       gen-linkml=https://example.org/main-says-shared/
+prefix only import: onlylib        unmerged=False                                       merge_imports=True                                        gen-linkml=True
+
+-- provenance
+LibThing from_schema               unmerged=https://example.org/lib                     merge_imports=https://example.org/main                    gen-linkml=https://example.org/main
+extra subset from_schema           unmerged=https://example.org/lib                     merge_imports=https://example.org/main                    gen-linkml=https://example.org/main
+gen-linkml output keys: ['name', 'id', 'default_prefix', 'default_range', 'metamodel_version', 'source_file']
+
+-- linkml:types
+gen-linkml output `imports`: None
+gen-linkml output defines `string`: True
+
+-- meaning of an imported element
+LibThing IRI                       unmerged=https://example.org/lib/LibThing            merge_imports=https://example.org/main/LibThing           gen-linkml=https://example.org/main/LibThing
+count IRI                          unmerged=https://example.org/lib/count               merge_imports=https://example.org/main/count              gen-linkml=https://example.org/main/count
+rangeless slot's range             unmerged=string                                      merge_imports=string                                      gen-linkml=string
+
+-- constructs outside panschema's IR
+gen-linkml keeps comments/in_subset/any_of: [True, True, True]
+gen-linkml adds per element: ['attributes', 'from_schema', 'name']

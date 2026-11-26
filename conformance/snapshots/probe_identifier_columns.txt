@@ -1,0 +1,110 @@
+== gen-sqlddl ==
+-- # Class: Holder
+--     * Slot: id
+-- # Class: Part
+--     * Slot: id
+--     * Slot: owner
+--     * Slot: Holder_id Description: Autocreated FK slot
+-- # Class: Tag
+--     * Slot: id
+-- # Class: UriRecord
+--     * Slot: uri_id
+-- # Class: CurieRecord
+--     * Slot: curie_id
+-- # Class: TypedRecord
+--     * Slot: typed_id
+-- # Class: PrefixedRecord
+--     * Slot: prefixed_id
+-- # Class: Holder_tags
+--     * Slot: Holder_id Description: Autocreated FK slot
+--     * Slot: tags_id
+-- # Class: Holder_uri_refs
+--     * Slot: Holder_id Description: Autocreated FK slot
+--     * Slot: uri_refs_uri_id
+
+CREATE TABLE "Holder" (
+	id TEXT NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX "ix_Holder_id" ON "Holder" (id);
+
+CREATE TABLE "Tag" (
+	id TEXT NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX "ix_Tag_id" ON "Tag" (id);
+
+CREATE TABLE "UriRecord" (
+	uri_id TEXT NOT NULL,
+	PRIMARY KEY (uri_id)
+);
+CREATE INDEX "ix_UriRecord_uri_id" ON "UriRecord" (uri_id);
+
+CREATE TABLE "CurieRecord" (
+	curie_id TEXT NOT NULL,
+	PRIMARY KEY (curie_id)
+);
+CREATE INDEX "ix_CurieRecord_curie_id" ON "CurieRecord" (curie_id);
+
+CREATE TABLE "TypedRecord" (
+	typed_id TEXT NOT NULL,
+	PRIMARY KEY (typed_id)
+);
+CREATE INDEX "ix_TypedRecord_typed_id" ON "TypedRecord" (typed_id);
+
+CREATE TABLE "PrefixedRecord" (
+	prefixed_id TEXT NOT NULL,
+	PRIMARY KEY (prefixed_id)
+);
+CREATE INDEX "ix_PrefixedRecord_prefixed_id" ON "PrefixedRecord" (prefixed_id);
+
+CREATE TABLE "Part" (
+	id TEXT NOT NULL,
+	owner TEXT,
+	"Holder_id" TEXT,
+	PRIMARY KEY (id),
+	FOREIGN KEY(owner) REFERENCES "Holder" (id),
+	FOREIGN KEY("Holder_id") REFERENCES "Holder" (id)
+);
+CREATE INDEX "ix_Part_id" ON "Part" (id);
+
+CREATE TABLE "Holder_tags" (
+	"Holder_id" TEXT,
+	tags_id TEXT,
+	PRIMARY KEY ("Holder_id", tags_id),
+	FOREIGN KEY("Holder_id") REFERENCES "Holder" (id),
+	FOREIGN KEY(tags_id) REFERENCES "Tag" (id)
+);
+CREATE INDEX "ix_Holder_tags_Holder_id" ON "Holder_tags" ("Holder_id");
+CREATE INDEX "ix_Holder_tags_tags_id" ON "Holder_tags" (tags_id);
+
+CREATE TABLE "Holder_uri_refs" (
+	"Holder_id" TEXT,
+	uri_refs_uri_id TEXT,
+	PRIMARY KEY ("Holder_id", uri_refs_uri_id),
+	FOREIGN KEY("Holder_id") REFERENCES "Holder" (id),
+	FOREIGN KEY(uri_refs_uri_id) REFERENCES "UriRecord" (uri_id)
+);
+CREATE INDEX "ix_Holder_uri_refs_Holder_id" ON "Holder_uri_refs" ("Holder_id");
+CREATE INDEX "ix_Holder_uri_refs_uri_refs_uri_id" ON "Holder_uri_refs" (uri_refs_uri_id);
+
+
+== gen-json-schema: id properties ==
+Holder.id: {"pattern": "^ex:[0-9a-f-]{36}$", "type": "string"}
+UriRecord.uri_id: {"format": "uri", "type": "string"}
+CurieRecord.curie_id: {"type": "string"}
+TypedRecord.typed_id: {"pattern": "^ex:[0-9a-f-]{36}$", "type": "string"}
+PrefixedRecord.prefixed_id: {"type": "string"}
+Holder.parts: {"items": {"$ref": "#/$defs/Part"}, "type": ["array", "null"]}
+Holder.tags: {"items": {"type": "string"}, "type": ["array", "null"]}
+Holder.uri_refs: {"items": {"format": "uri", "type": "string"}, "type": ["array", "null"]}
+== gen-pydantic: id fields ==
+Holder.id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Holder', 'Part', 'Tag']} })
+Part.id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Holder', 'Part', 'Tag']} })
+Tag.id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Holder', 'Part', 'Tag']} })
+UriRecord.uri_id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['UriRecord']} })
+CurieRecord.curie_id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['CurieRecord']} })
+TypedRecord.typed_id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['TypedRecord']} })
+PrefixedRecord.prefixed_id: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['PrefixedRecord'], 'implicit_prefix': 'ex'} })
+== implicit_prefix in SchemaView ==
+implicit_prefix = 'ex'

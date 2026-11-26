@@ -10,7 +10,9 @@ collide on purpose. Each line compares three readings: `gen-linkml
 imported elements.
 """
 
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -82,8 +84,11 @@ classes:
 
 
 def gen_linkml_merged(main: Path) -> str:
+    exe = shutil.which("gen-linkml", path=str(Path(sys.executable).parent))
+    if exe is None:
+        sys.exit("gen-linkml is not installed in this environment")
     return subprocess.run(
-        ["gen-linkml", "--mergeimports", "--no-materialize", "-f", "yaml", str(main)],
+        [exe, "--mergeimports", "--no-materialize", "-f", "yaml", str(main)],
         check=True,
         capture_output=True,
         text=True,
@@ -106,7 +111,7 @@ def row(label: str, values: dict[str, object]) -> None:
 
 
 def main() -> None:
-    print("linkml-runtime", linkml_runtime.__version__)
+    print("linkml-runtime", linkml_runtime.__version__, file=sys.stderr)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for name, text in FILES.items():

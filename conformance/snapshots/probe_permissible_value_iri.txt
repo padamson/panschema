@@ -1,0 +1,33 @@
+gen-owl under default prefix https://example.org/t/
+  owl:Class              http://www.w3.org/2004/02/skos/core#DeclaredScheme  label=declared
+  owl:Class              http://www.w3.org/2004/02/skos/core#DeclaredScheme#only  label=only
+  owl:Class              https://example.org/t/ItemStatus  label=item_status
+  owl:Class              https://example.org/t/ItemStatus#a%2Fb  label=a/b
+  owl:Class              https://example.org/t/ItemStatus#caf%C3%A9  label=café
+  owl:Class              https://example.org/t/ItemStatus#in%20progress  label=in progress
+  owl:Class              https://example.org/t/ItemStatus#planned  label=planned
+  owl:Class              https://example.org/t/PersonRecord  label=person_record
+  owl:ObjectProperty     https://example.org/t/declared  label=declared
+  owl:ObjectProperty     https://example.org/t/has_owner  label=has owner
+  owl:ObjectProperty     https://example.org/t/id  label=id
+  owl:ObjectProperty     https://example.org/t/in_stock  label=in-stock
+  owl:ObjectProperty     https://example.org/t/status  label=status
+gen-owl under default prefix https://example.org/t#
+  owl:Class              http://www.w3.org/2004/02/skos/core#DeclaredScheme  label=declared
+  owl:Class              http://www.w3.org/2004/02/skos/core#DeclaredScheme#only  label=only
+  owl:Class              https://example.org/t#ItemStatus  label=item_status
+  owl:Class              https://example.org/t#ItemStatus#a%2Fb  label=a/b
+  owl:Class              https://example.org/t#ItemStatus#caf%C3%A9  label=café
+  owl:Class              https://example.org/t#ItemStatus#in%20progress  label=in progress
+  owl:Class              https://example.org/t#ItemStatus#planned  label=planned
+  owl:Class              https://example.org/t#PersonRecord  label=person_record
+  owl:ObjectProperty     https://example.org/t#declared  label=declared
+  owl:ObjectProperty     https://example.org/t#has_owner  label=has owner
+  owl:ObjectProperty     https://example.org/t#id  label=id
+  owl:ObjectProperty     https://example.org/t#in_stock  label=in-stock
+  owl:ObjectProperty     https://example.org/t#status  label=status
+gen-shacl: sh:in members on the enum-ranged slots
+  ['only']
+  ['planned', 'in progress', 'a/b', 'café', 'http://www.w3.org/2004/02/skos/core#Concept']
+rdflib_dumper: the status object for a record whose status is `in progress`
+  rdflib.term.Literal('in progress')

@@ -1,0 +1,135 @@
+== control: load ok, validate exit 0
+== annotations (on slot)
+   load: {'Sub sees annotations': {'bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: + t:bounds_count_of "JsonObj(counted_slot='anchors')"
+   gen-shacl: + bounds_count_of^^string (literal predicate) "{'counted_slot': 'anchors'}"
+   gen-json-schema: nothing
+== annotations (on slot_usage)
+   load: {'Sub sees annotations': {'bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== annotations, typo (on slot)
+   load: {'Sub sees annotations': {'bounds_count_of': {'countd_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== annotations, typo (on slot_usage)
+   load: {'Sub sees annotations': {'bounds_count_of': {'countd_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== annotations, declared prefix (on slot)
+   load: {'Sub sees annotations': {'pm:bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: + pm:bounds_count_of "JsonObj(counted_slot='anchors')"
+   gen-shacl: + pm:bounds_count_of "{'counted_slot': 'anchors'}"
+   gen-json-schema: nothing
+== annotations, declared prefix (on slot_usage)
+   load: {'Sub sees annotations': {'pm:bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== annotations, undeclared prefix (on slot)
+   load: {'Sub sees annotations': {'px:bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: nothing
+   gen-shacl: + px:bounds_count_of "{'counted_slot': 'anchors'}"
+   gen-json-schema: nothing
+== annotations, undeclared prefix (on slot_usage)
+   load: {'Sub sees annotations': {'px:bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== extensions (on slot)
+   load: {'Sub sees extensions': {'bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: nothing
+   gen-shacl: nothing
+   gen-json-schema: nothing
+== extensions (on slot_usage)
+   load: {'Sub sees extensions': {'bounds_count_of': {'counted_slot': 'anchors'}}}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates (on slot)
+   load: {'Sub sees annotations': {'counted_slot': 'anchors'}, 'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: + t:counted_slot 'anchors'
+   gen-shacl: + counted_slot^^string (literal predicate) anchors^^string
+   gen-json-schema: nothing
+== instantiates (on slot_usage)
+   load: {'Sub sees annotations': {'counted_slot': 'anchors'}, 'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, typo (on slot)
+   load: {'Sub sees annotations': {'countd_slot': 'anchors'}, 'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, typo (on slot_usage)
+   load: {'Sub sees annotations': {'countd_slot': 'anchors'}, 'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, missing (on slot)
+   load: {'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, missing (on slot_usage)
+   load: {'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, not imported (on slot)
+   load: {'Sub sees annotations': {'counted_slot': 'anchors'}, 'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: + t:counted_slot 'anchors'
+   gen-shacl: + counted_slot^^string (literal predicate) anchors^^string
+   gen-json-schema: - /$defs/CountBound; - /$defs/StructuredCountBound
+== instantiates, not imported (on slot_usage)
+   load: {'Sub sees annotations': {'counted_slot': 'anchors'}, 'Sub sees instantiates': ['pm:CountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, undefined metaclass (on slot)
+   load: {'Sub sees annotations': {'counted_slot': 'anchors'}, 'Sub sees instantiates': ['pm:Undefined']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: + t:counted_slot 'anchors'
+   gen-shacl: + counted_slot^^string (literal predicate) anchors^^string
+   gen-json-schema: nothing
+== instantiates, undefined metaclass (on slot_usage)
+   load: {'Sub sees annotations': {'counted_slot': 'anchors'}, 'Sub sees instantiates': ['pm:Undefined']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, structured (on slot)
+   load: {'Sub sees annotations': {'bounds_count_of': {'counted_slot': 'anchors'}}, 'Sub sees instantiates': ['pm:StructuredCountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+   gen-owl: + t:bounds_count_of "JsonObj(counted_slot='anchors')"
+   gen-shacl: + bounds_count_of^^string (literal predicate) "{'counted_slot': 'anchors'}"
+   gen-json-schema: nothing
+== instantiates, structured (on slot_usage)
+   load: {'Sub sees annotations': {'bounds_count_of': {'counted_slot': 'anchors'}}, 'Sub sees instantiates': ['pm:StructuredCountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, structured typo (on slot)
+   load: {'Sub sees annotations': {'bounds_count_of': {'countd_slot': 'anchors'}}, 'Sub sees instantiates': ['pm:StructuredCountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== instantiates, structured typo (on slot_usage)
+   load: {'Sub sees annotations': {'bounds_count_of': {'countd_slot': 'anchors'}}, 'Sub sees instantiates': ['pm:StructuredCountBound']}
+   linkml-lint adds: nothing
+   linkml-validate (metamodel): exit 0, no messages
+== bare metaslot (on slot)
+   load: {'load': "ERROR TypeError: SlotDefinition.__init__() got an unexpected keyword argument 'bounds_count_of'"}
+   linkml-lint adds: [('error', 'valid-schema', "In slots > budget: Additional properties are not allowed ('bounds_count_of' was unexpected)")]
+   linkml-validate (metamodel): exit 1, ["[ERROR] [<schema>] In slots > budget: Additional properties are not allowed ('bounds_count_of' was unexpected)"]
+   gen-owl: failed: TypeError: SlotDefinition.__init__() got an unexpected keyword argument 'bounds_count_of'
+   gen-shacl: failed: TypeError: SlotDefinition.__init__() got an unexpected keyword argument 'bounds_count_of'
+   gen-json-schema: failed: TypeError: SlotDefinition.__init__() got an unexpected keyword argument 'bounds_count_of'
+== bare metaslot (on slot_usage)
+   load: {'load': "ERROR TypeError: SlotDefinition.__init__() got an unexpected keyword argument 'bounds_count_of'"}
+   linkml-lint adds: [('error', 'valid-schema', "In classes > Benchmark > slot_usage > budget: Additional properties are not allowed ('bounds_count_of' was unexpected)")]
+   linkml-validate (metamodel): exit 1, ["[ERROR] [<schema>] In classes > Benchmark > slot_usage > budget: Additional properties are not allowed ('bounds_count_of' was unexpected)"]
+== annotation value checked as data against the metaclass
+   well-formed: exit 0, no errors
+   typo: exit 1, ["[ERROR] [<tmp>/value.yaml/0] Additional properties are not allowed ('countd_slot' was unexpected) in /", "[ERROR] [<tmp>/value.yaml/0] 'counted_slot' is a required property in /"]

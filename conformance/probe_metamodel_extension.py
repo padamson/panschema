@@ -211,12 +211,16 @@ def on_budget(graph: Graph) -> frozenset:
     return described(graph, BUDGET)
 
 
+def shown(pairs) -> list[str]:
+    """Pairs as sorted text, a blank node's description in brackets, so the order never depends on hashing."""
+    return sorted(f"{p} [{'; '.join(shown(o))}]" if isinstance(o, frozenset) else f"{p} {o}" for p, o in pairs)
+
+
 def rdf_change(control, graph) -> str:
     if isinstance(graph, str):
         return graph
     base, now = on_budget(control), on_budget(graph)
-    lines = [f"+ {p} {o}" for p, o in sorted(now - base, key=str)]
-    lines += [f"- {p} {o}" for p, o in sorted(base - now, key=str)]
+    lines = [f"+ {pair}" for pair in shown(now - base)] + [f"- {pair}" for pair in shown(base - now)]
     return "; ".join(line[:150] for line in lines) or "nothing"
 
 
@@ -266,7 +270,7 @@ def write(tmp: Path, schema: dict) -> Path:
 
 
 def main() -> None:
-    print("linkml-runtime", linkml_runtime.__version__)
+    print("linkml-runtime", linkml_runtime.__version__, file=sys.stderr)
     bindir = str(Path(sys.executable).parent)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)

@@ -19,7 +19,9 @@ Evidence behind the Postgres writer keeping an IRI id a `text` column.
 choice, as on every other patterned column.
 """
 
+import itertools
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -73,11 +75,20 @@ FAILED: list[str] = []
 
 
 def run(cmd: list[str]) -> str:
-    out = subprocess.run(cmd, capture_output=True, text=True)
+    exe = shutil.which(cmd[0], path=str(Path(sys.executable).parent))
+    if exe is None:
+        sys.exit(f"{cmd[0]} is not installed in this environment")
+    out = subprocess.run([exe, *cmd[1:]], capture_output=True, text=True)
     if out.returncode != 0:
         FAILED.append(cmd[0])
         return f"[exit {out.returncode}] {out.stderr.strip()[-400:]}"
     return out.stdout
+
+
+def sorted_index_runs(ddl: str) -> str:
+    """Sort each run of consecutive `CREATE INDEX` lines, whose order `gen-sqlddl` varies between runs."""
+    groups = itertools.groupby(ddl.splitlines(), key=lambda line: line.startswith("CREATE INDEX"))
+    return "".join(f"{line}\n" for is_index, group in groups for line in (sorted(group) if is_index else group))
 
 
 def main() -> int:
@@ -86,7 +97,7 @@ def main() -> int:
         schema.write_text(COMPOSITION)
 
         print("== gen-sqlddl ==")
-        print(run(["gen-sqlddl", str(schema)]))
+        print(sorted_index_runs(run(["gen-sqlddl", str(schema)])))
 
         print("== gen-json-schema: id properties ==")
         js = run(["gen-json-schema", str(schema)])

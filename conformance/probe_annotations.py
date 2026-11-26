@@ -7,6 +7,8 @@ deliberate divergence is documented on `Annotations` in linkml.rs:
 panschema reads bare scalar values lexically as strings).
 """
 
+import sys
+
 from linkml_runtime.utils.schemaview import SchemaView
 import linkml_runtime
 
@@ -37,7 +39,7 @@ CASES = {
 
 
 def main() -> None:
-    print("linkml-runtime", linkml_runtime.__version__)
+    print("linkml-runtime", linkml_runtime.__version__, file=sys.stderr)
     for name, body in CASES.items():
         try:
             view = SchemaView(PREAMBLE + body)

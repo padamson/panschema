@@ -1,0 +1,40 @@
+== identifier on the slot, key through slot_usage
+   SchemaLoader: FAIL:  slot: Scoped_id - A slot cannot be both a key and identifier at the same time
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.id: identifier=True key=True
+   generators:   failed: gen-python, gen-rdf, gen-jsonld, gen-jsonld-context, gen-shex, gen-graphql
+   validate:     valid
+== key on the slot, identifier through slot_usage
+   SchemaLoader: FAIL:  slot: Root_id - A slot cannot be both a key and identifier at the same time
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.id: identifier=False key=True
+   generators:   failed: gen-python, gen-rdf, gen-jsonld, gen-jsonld-context, gen-shex, gen-graphql
+   validate:     valid
+== neither on the slot, one per class through slot_usage
+   SchemaLoader: ok
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.id: identifier=False key=True
+   generators:   all ran
+   validate:     valid
+== neither on the slot, one per abstract parent
+   SchemaLoader: ok
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.id: identifier=False key=True
+   generators:   all ran
+   validate:     valid
+== neither on the slot, one per mixin
+   SchemaLoader: ok
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.id: identifier=False key=True
+   generators:   all ran
+   validate:     valid
+== identifier on a parent's slot_usage, key on the child's
+   SchemaLoader: FAIL:  slot: Scoped_id - A slot cannot be both a key and identifier at the same time
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.id: identifier=True key=True
+   generators:   failed: gen-python, gen-rdf, gen-jsonld, gen-jsonld-context, gen-shex, gen-graphql
+   validate:     valid
+== identifier on the is_a parent, key on a mixin
+   SchemaLoader: ok
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.id: identifier=True key=True
+   generators:   all ran
+   validate:     valid
+== separate identifier and key slots
+   SchemaLoader: ok
+   SchemaView:   Root.id: identifier=True key=False; Shared.id: identifier=True key=False; Scoped.local_id: identifier=False key=True
+   generators:   all ran
+   validate:     valid

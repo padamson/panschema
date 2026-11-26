@@ -1,0 +1,13 @@
+compact scalar         -> {'note': "'hello'"}
+bare structured        -> ERROR: TypeError: Annotation.__init__() got an unexpected keyword argument 'stage'
+expanded map           -> {'note': "'hello'"}
+expanded list          -> {'note': "'hello'"}
+value-wrapped struct   -> {'review_status': "JsonObj(stage='draft')"}
+value+sibling keys     -> ERROR: TypeError: Annotation.__init__() got an unexpected keyword argument 'stage'
+nested annotations     -> {'note': "'hello'"}
+tag mismatch           -> ERROR: ValueError: Slot: annotations - attribute tag value (File "<file>", line 9, col 14: elsewhere) does not match key (note)
+map missing value      -> {'note': 'None'}
+list missing value     -> {'note': 'None'}
+bare sequence          -> {'note': "['a', 'b']"}
+numeric scalar         -> {'note': '2024'}
+bool scalar            -> {'note': 'True'}

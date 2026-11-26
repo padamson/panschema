@@ -1,0 +1,201 @@
+name: Upstream LinkML Check
+
+# The conformance probes measure LinkML's reference implementation, and
+# conformance/snapshots/ records what each prints at the LinkML pinned in
+# conformance/uv.lock. Dependabot moves that pin, but no other job runs
+# the probes, so a release that changes a verdict panschema relies on
+# would merge as a green bump and go unnoticed.
+#
+# On a push or PR that touches conformance/, the probes must match their
+# snapshots at the pin. The check is required on main, so it reports on
+# every PR and skips the probes when conformance/ is untouched: a
+# Dependabot bump that changes a verdict waits for review instead of
+# auto-merging. Weekly, they also run against the latest LinkML
+# release and against LinkML's main, and each target keeps one tracking
+# issue with the diff: opened or updated while the probes differ, closed
+# when they match again. It never moves the pin or a snapshot: a changed
+# verdict is a decision about what panschema follows, made in a reviewed
+# commit.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "conformance/**"
+      - ".github/workflows/upstream-linkml-check.yml"
+  # No path filter: a required check that never reports holds the PR.
+  pull_request:
+    branches: [main]
+  schedule:
+    # Saturday 10:00 UTC, after the Dependabot window (04:00 ET) and the
+    # weekly Security & Quality run (09:00 UTC).
+    - cron: "0 10 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned:
+    name: Probes match their snapshots
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compute diff base
+        id: base
+        uses: ./.github/actions/diff-base
+
+      - name: Find whether the probes or this workflow changed
+        id: changes
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          # An unreachable base (a force push) is checked rather than skipped.
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            && git diff --quiet "$BASE" HEAD -- conformance .github/workflows/upstream-linkml-check.yml; then
+            echo "Nothing under conformance/ changed; the probes are not run."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          enable-cache: true
+          cache-dependency-glob: conformance/uv.lock
+
+      - name: Check the probes against their snapshots
+        if: steps.changes.outputs.changed == 'true'
+        run: uv run --project conformance --frozen conformance/snapshot.py --check
+
+  upstream:
+    name: Probes against LinkML ${{ matrix.target }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write # open, update and close the target's tracking issue
+    # Two overlapping runs of one target would each open an issue.
+    concurrency:
+      group: upstream-linkml-${{ matrix.target }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [release, main]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: conformance/uv.lock
+          # The target's LinkML is not the lock's, so only the pinned job saves.
+          save-cache: false
+
+      - name: Install the target's LinkML over the locked environment
+        id: install
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version_of() {
+            uv run --project conformance --no-sync python -c \
+              'import importlib.metadata as m; print(m.version("linkml"))'
+          }
+          uv sync --project conformance --frozen
+          pinned="$(version_of)"
+          if [ "$TARGET" = release ]; then
+            latest="$(curl -sf https://pypi.org/pypi/linkml/json | jq -r .info.version)"
+            uv pip install --python conformance/.venv \
+              --upgrade-package linkml --upgrade-package linkml-runtime \
+              "linkml==${latest}" linkml-runtime
+            measured="$(version_of)"
+          else
+            sha="$(git ls-remote https://github.com/linkml/linkml refs/heads/main | cut -f1)"
+            if [ -z "$sha" ]; then
+              echo "::error::could not read LinkML's main from github.com"
+              exit 1
+            fi
+            repo="git+https://github.com/linkml/linkml@${sha}"
+            uv pip install --python conformance/.venv \
+              "linkml-runtime @ ${repo}#subdirectory=packages/linkml_runtime" \
+              "linkml @ ${repo}#subdirectory=packages/linkml"
+            measured="main at ${sha:0:10} ($(version_of))"
+          fi
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "measured=$measured" >> "$GITHUB_OUTPUT"
+          echo "Pinned linkml $pinned; measuring $measured"
+
+      - name: Check the probes against their snapshots
+        id: probe
+        run: |
+          code=0
+          uv run --project conformance --no-sync conformance/snapshot.py --check > "$RUNNER_TEMP/check.txt" || code=$?
+          cat "$RUNNER_TEMP/check.txt"
+          case "$code" in
+            0) echo "verdict=match" >> "$GITHUB_OUTPUT" ;;
+            1) echo "verdict=differ" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::snapshot.py exited $code"; exit "$code" ;;
+          esac
+
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ matrix.target }}
+          PINNED: ${{ steps.install.outputs.pinned }}
+          MEASURED: ${{ steps.install.outputs.measured }}
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+          LABEL: upstream-linkml
+        run: |
+          set -euo pipefail
+          title="LinkML ${TARGET}: conformance probes differ from their snapshots"
+          existing=$(gh issue list --state open --label "$LABEL" --json number,title \
+            --jq "[.[] | select(.title == \"${title}\")][0].number // empty")
+
+          if [ "$VERDICT" = match ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --comment "The probes match their snapshots against LinkML ${MEASURED}."
+              echo "Closed #${existing}"
+            fi
+            exit 0
+          fi
+
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "The conformance probes print something different against LinkML **${MEASURED}** than \`conformance/snapshots/\` records for the pinned **${PINNED}**."
+            echo
+            echo "~~~~diff"
+            head -c 55000 "$RUNNER_TEMP/check.txt"
+            echo "~~~~"
+            echo
+            echo "## What to do"
+            echo
+            echo "- Read each changed verdict against the code, the writer, or the \`docs/linkml-coverage.md\` row the probe is evidence for (each probe's docstring and \`conformance/README.md\` name it), and decide whether panschema follows."
+            echo "- Once the pin is at a release that carries the change, re-record with \`uv run --project conformance conformance/snapshot.py\` and commit the snapshots with the panschema change, if any."
+            echo
+            echo "## Tracking"
+            echo
+            echo "- Opened or updated weekly by \`.github/workflows/upstream-linkml-check.yml\`, which re-runs the probes against current \`main\` each week"
+            echo "- Closes itself when the probes match their snapshots again"
+          } > "$body"
+
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file "$body"
+            echo "Updated #${existing}"
+          else
+            gh label create "$LABEL" \
+              --description "A LinkML release or main that changes a conformance probe" \
+              --color 1d76db 2>/dev/null || true
+            gh issue create --label "$LABEL" --title "$title" --body-file "$body"
+          fi

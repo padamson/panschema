@@ -9,6 +9,8 @@ JSON Schema writer's tests freeze the accepted pairs (`LINKML_ACCEPTS` in
 `panschema/src/json_schema_writer.rs`); refresh them when this grid grows.
 """
 
+import sys
+
 from linkml.validator import validate
 from linkml_runtime.utils.schemaview import SchemaView
 import linkml_runtime
@@ -72,7 +74,7 @@ FORMS = {
 
 
 def main() -> None:
-    print("linkml-runtime", linkml_runtime.__version__)
+    print("linkml-runtime", linkml_runtime.__version__, file=sys.stderr)
     for slot_name, slot in SLOTS.items():
         schema = SCHEMA.format(slot=slot)
         # The schema must at least load; a declaration the metamodel

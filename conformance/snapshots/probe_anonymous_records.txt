@@ -1,0 +1,55 @@
+== a list of records
+   validate: No issues found
+   convert:
+     ex:p1 a ex:Parcel ;
+     	ex:stamps _:c14n0 , _:c14n1 .
+     ex:root a ex:Root ;
+     	ex:parcels ex:p1 .
+     _:c14n0 a ex:Stamp ;
+     	ex:name "north" ;
+     	ex:value 1 .
+     _:c14n1 a ex:Stamp ;
+     	ex:name "south" ;
+     	ex:value 2 .
+== a single-valued record
+   validate: No issues found
+   convert:
+     ex:p1 a ex:Parcel ;
+     	ex:size _:c14n0 .
+     ex:root a ex:Root ;
+     	ex:parcels ex:p1 .
+     _:c14n0 a ex:Size ;
+     	ex:width 3 .
+== a record nested in a record
+   validate: No issues found
+   convert:
+     ex:p1 a ex:Parcel ;
+     	ex:stamps _:c14n1 .
+     ex:root a ex:Root ;
+     	ex:parcels ex:p1 .
+     _:c14n0 a ex:Size ;
+     	ex:width 4 .
+     _:c14n1 a ex:Stamp ;
+     	ex:name "north" ;
+     	ex:size _:c14n0 .
+== two records sharing a name
+   validate: No issues found
+   convert:
+     ex:p1 a ex:Parcel ;
+     	ex:stamps _:c14n0 , _:c14n1 .
+     ex:root a ex:Root ;
+     	ex:parcels ex:p1 .
+     _:c14n0 a ex:Stamp ;
+     	ex:name "north" ;
+     	ex:value 1 .
+     _:c14n1 a ex:Stamp ;
+     	ex:name "north" ;
+     	ex:value 2 .
+== a bare string where a record belongs
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'north' is not of type 'object' in /parcels/0/stamps/0
+   convert:
+     exit 1: TypeError: test.Stamp() argument after ** must be a mapping, not extended_str
+== records in a dict spelling
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] {'north': {'value': 1}, 'south': {'value': 2}} is not of type 'array', 'null' in /parcels/0/stamps
+   convert:
+     exit 1: TypeError: Stamp.__init__() got an unexpected keyword argument 'north'

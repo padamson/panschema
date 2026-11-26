@@ -94,7 +94,9 @@ updates:
     open-pull-requests-limit: 10
     cooldown:
       default-days: 7
-    # One PR for the week's Python bumps; nothing in CI depends on them.
+    # One PR for the week's Python bumps. The Upstream LinkML Check runs the
+    # probes against each one, and its required check holds the PR when a
+    # verdict changes.
     groups:
       conformance:
         patterns:
