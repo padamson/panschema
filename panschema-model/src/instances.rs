@@ -887,7 +887,7 @@ impl InstanceSet {
     ) -> Self {
         let mut loader = LinkmlLoader::new(schema);
         loader.place = LONE_RECORD.to_string();
-        loader.holders_outside = true;
+        loader.outside_bases = loader.bases_holders_state(class);
         loader.build_record(class, None, record);
         loader.into_set()
     }
@@ -1108,9 +1108,10 @@ struct LinkmlLoader<'a> {
     /// its `is_a` descendants — built once for the IRI/CURIE spellings;
     /// bare names answer without it.
     family_by_class: std::collections::BTreeMap<String, Vec<String>>,
-    /// Whether the records being read were sent without the records that
-    /// hold them, so what a holder states is unknown here.
-    holders_outside: bool,
+    /// When the records being read were sent without the records that
+    /// hold them, the bases a holder could state, each unknown here
+    /// rather than missing.
+    outside_bases: std::collections::BTreeSet<String>,
 }
 
 impl<'a> LinkmlLoader<'a> {
@@ -1140,7 +1141,7 @@ impl<'a> LinkmlLoader<'a> {
             place: String::new(),
             anonymous_ids: std::collections::HashSet::new(),
             family_by_class: std::collections::BTreeMap::new(),
-            holders_outside: false,
+            outside_bases: std::collections::BTreeSet::new(),
         }
     }
 
@@ -1246,6 +1247,21 @@ impl<'a> LinkmlLoader<'a> {
         crate::linkml_resolve::designator_in(slots.iter().map(|(name, rs)| (name, &rs.definition)))
     }
 
+    /// The `expand_against` bases a record holding a `class_name` record
+    /// could state: those carried as scalars by a class
+    /// [`inlining_holders`](crate::linkml_resolve::inlining_holders) names.
+    fn bases_holders_state(&mut self, class_name: &str) -> std::collections::BTreeSet<String> {
+        let mut bases = std::collections::BTreeSet::new();
+        if self.expand_base_names.is_empty() {
+            return bases;
+        }
+        for holder in crate::linkml_resolve::inlining_holders(self.schema, class_name) {
+            let slots = self.resolved_slots(&holder);
+            bases.extend(self.scalar_base_slots(&slots).cloned());
+        }
+        bases
+    }
+
     /// Whether `slot_name` is an effective slot of `class_name`.
     fn class_carries(&mut self, class_name: &str, slot_name: &str) -> bool {
         self.resolved_slots(class_name).contains_key(slot_name)
@@ -1333,6 +1349,21 @@ impl<'a> LinkmlLoader<'a> {
         }
     }
 
+    /// The `expand_against` base slots among `resolved` that carry a
+    /// scalar, the only ones a record states a base through.
+    fn scalar_base_slots<'s>(
+        &'s self,
+        resolved: &'s std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
+    ) -> impl Iterator<Item = &'s String> {
+        self.expand_base_names.iter().filter(|name| {
+            resolved.get(*name).is_some_and(|rs| {
+                !rs.effective_ranges()
+                    .iter()
+                    .any(|r| self.schema.classes.contains_key(*r))
+            })
+        })
+    }
+
     /// Build one record's expansion frame: candidates for the declared
     /// base slots its resolved class view carries as scalars, with the
     /// dict-key identifier standing in exactly as it does for the
@@ -1346,17 +1377,7 @@ impl<'a> LinkmlLoader<'a> {
         id_slot: Option<&str>,
     ) -> ExpandFrame {
         let mut bases = std::collections::BTreeMap::new();
-        for name in &self.expand_base_names {
-            let Some(rs) = resolved.get(name) else {
-                continue;
-            };
-            if rs
-                .effective_ranges()
-                .iter()
-                .any(|r| self.schema.classes.contains_key(*r))
-            {
-                continue;
-            }
+        for name in self.scalar_base_slots(resolved) {
             match base_from_mapping(map, name, dict_key, id_slot) {
                 OwnBase::Value(base) => {
                     bases.insert(name.clone(), Ok(base.to_string()));
@@ -1441,7 +1462,7 @@ impl<'a> LinkmlLoader<'a> {
         match expand.resolved {
             // A lone record's holders are not in hand, so the base they
             // may state is unknown rather than missing.
-            Err(NoBase::Absent) if self.holders_outside => None,
+            Err(NoBase::Absent) if self.outside_bases.contains(expand.base_slot) => None,
             Err(no_base) => {
                 self.note_supplied_gap(
                     record,

@@ -849,6 +849,46 @@ pub fn is_inlined<'a>(
     !matches!(holding(slot, range_slots), Holding::Reference(_))
 }
 
+/// The classes whose records can hold a `class_name` record inline,
+/// directly or through records they hold: each has a slot that inlines
+/// ([`is_inlined`]) the class or one of its ancestors, or inlines such a
+/// holder. A slot that only references the class holds none of its
+/// records, a `tree_root`'s included.
+pub fn inlining_holders(schema: &SchemaDefinition, class_name: &str) -> BTreeSet<String> {
+    let resolved: BTreeMap<&String, BTreeMap<String, ResolvedSlot>> = schema
+        .classes
+        .iter()
+        .map(|(name, class)| (name, resolve_effective_slots_with_provenance(class, schema)))
+        .collect();
+    let mut inlined_by: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (holder, slots) in &resolved {
+        for rs in slots.values() {
+            for range in rs.effective_ranges() {
+                if let Some(range_slots) = resolved.get(range)
+                    && is_inlined(
+                        &rs.definition,
+                        range_slots.iter().map(|(name, r)| (name, &r.definition)),
+                    )
+                {
+                    inlined_by.entry(range).or_default().insert(holder);
+                }
+            }
+        }
+    }
+    let mut holders = BTreeSet::new();
+    let mut held = vec![class_name.to_string()];
+    while let Some(class) = held.pop() {
+        for (ancestor, _) in class_ancestors(schema, &class) {
+            for holder in inlined_by.get(ancestor).into_iter().flatten() {
+                if holders.insert((*holder).to_string()) {
+                    held.push((*holder).to_string());
+                }
+            }
+        }
+    }
+    holders
+}
+
 /// How a class-ranged slot holds the records it names.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Holding<'a> {
@@ -2035,6 +2075,46 @@ mod tests {
         let other = resolve_effective_slots(&schema.classes["Other"], &schema);
         assert_eq!(other["things"].inlined, Some(false));
         assert_eq!(other["things"].inlined_as_list, None);
+    }
+
+    #[test]
+    fn inlining_holders_follow_inlining_up_from_the_class_and_its_ancestors() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "
+id: https://example.org/h
+name: h
+default_range: string
+classes:
+  Entry: {}
+  Question:
+    is_a: Entry
+    attributes:
+      id: {identifier: true}
+  Section:
+    attributes:
+      questions: {range: Question, multivalued: true, inlined_as_list: true}
+      subsections: {range: Section, multivalued: true, inlined_as_list: true}
+  Shelf:
+    attributes:
+      sections: {range: Section, multivalued: true}
+  Bin:
+    attributes:
+      entries: {range: Entry, multivalued: true, inlined_as_list: true}
+  Bench:
+    tree_root: true
+    attributes:
+      questions: {range: Question, multivalued: true}
+",
+        )
+        .expect("parse schema");
+        assert_eq!(
+            inlining_holders(&schema, "Question"),
+            BTreeSet::from([
+                "Bin".to_string(),
+                "Section".to_string(),
+                "Shelf".to_string()
+            ])
+        );
     }
 
     /// The one inlining rule, measured against LinkML: a declaration wins,

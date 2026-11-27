@@ -1093,10 +1093,13 @@ pub enum RecordError {
 /// What lives outside the record is not checked: a reference against the
 /// record it names, and what a record holding this one would state (the
 /// base an `expand_against` slot's bare values join, a `bounds_count_of`
-/// bound). The record is read as the JSON `serde_json` writes for it, so a
-/// struct gets the findings its JSON would: a number or boolean map key is
-/// its text, and a float JSON cannot hold (an infinity or a NaN) is null,
-/// so absent. A record with no JSON form (a map with a `None` key) is
+/// bound). A base no class that can hold the record carries is missing,
+/// not unknown, and reported.
+///
+/// The record is read as the JSON `serde_json` writes for it, so a struct
+/// gets the findings its JSON would: a number or boolean map key is its
+/// text, and a float JSON cannot hold (an infinity or a NaN) is null, so
+/// absent. A record with no JSON form (a map with a `None` key) is
 /// [`RecordError::Unserializable`].
 ///
 /// ```
@@ -4564,24 +4567,107 @@ slots:
         schema
     }
 
+    /// A schema whose `Question` expands its anchors against its own
+    /// `target_schema` (and others against its `other_base`), held as
+    /// `classes` (YAML, indented under `classes:`) declare.
+    fn anchored_with(classes: &str) -> SchemaDefinition {
+        let mut schema: SchemaDefinition = serde_norway::from_str(&format!(
+            "
+id: https://example.org/bench
+name: bench
+default_range: string
+slots:
+  id: {{identifier: true}}
+  target_schema: {{range: uri}}
+  other_base: {{range: uri}}
+  questions: {{range: Question, multivalued: true, inlined_as_list: true}}
+  cited_questions: {{range: Question, multivalued: true}}
+  entries: {{range: Entry, multivalued: true, inlined_as_list: true}}
+  sections: {{range: Section, multivalued: true, inlined_as_list: true}}
+  expected_anchors:
+    range: DomainRecord
+    multivalued: true
+    annotations: {{expand_against: target_schema}}
+  other_anchors:
+    range: DomainRecord
+    multivalued: true
+    annotations: {{expand_against: other_base}}
+classes:
+  Entry: {{}}
+  Question:
+    is_a: Entry
+    slots: [id, target_schema, expected_anchors, other_base, other_anchors]
+  DomainRecord:
+    slots: [id]
+  Profile:
+    attributes:
+      name: {{}}
+{classes}"
+        ))
+        .expect("parse anchored schema");
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        schema
+    }
+
     #[test]
-    fn a_base_left_to_a_holder_outside_the_record_is_not_a_gap() {
-        let in_a_bench_with_no_base = validate_instance_data(
-            &anchored_schema(),
-            &data("id: b1\nquestions:\n  - {id: q1, expected_anchors: [cabernet]}\n"),
-        );
-        assert!(
-            records_and_kinds(&in_a_bench_with_no_base).contains(&("q1", kind::EXPANSION_GAP)),
-            "in a dataset, a bare anchor with no base anywhere is a gap; got: \
-             {in_a_bench_with_no_base:?}"
-        );
-        let v = validate_record(
-            &anchored_schema(),
-            "Question",
-            &data("{id: q1, expected_anchors: [cabernet]}"),
-        )
-        .expect("Question is declared");
-        assert_eq!(v, vec![]);
+    fn a_lone_records_absent_base_is_a_gap_unless_a_class_holding_it_states_one() {
+        type Found = &'static [(&'static str, &'static str)];
+        let gap: Found = &[("q1", kind::EXPANSION_GAP)];
+        let cases: [(&str, &str, Found); 8] = [
+            (
+                "a record inlining it",
+                "  Section:\n    slots: [target_schema, questions]\n",
+                &[],
+            ),
+            (
+                "a record holding a record inlining it",
+                "  Shelf:\n    slots: [target_schema, sections]\n  \
+                 Section:\n    slots: [questions]\n",
+                &[],
+            ),
+            (
+                "a record inlining its parent class",
+                "  Section:\n    slots: [target_schema, entries]\n",
+                &[],
+            ),
+            (
+                "only the record's own class",
+                "  Section:\n    slots: [questions]\n",
+                gap,
+            ),
+            (
+                "only a record referencing it",
+                "  Section:\n    slots: [target_schema, cited_questions]\n",
+                gap,
+            ),
+            // In a dataset such a root supplies its base only to a record
+            // authored inline at a reference slot, itself a finding.
+            (
+                "only a root referencing it",
+                "  Bench:\n    tree_root: true\n    slots: [id, target_schema, cited_questions]\n",
+                gap,
+            ),
+            (
+                "only a record inlining it, as another base",
+                "  Section:\n    slots: [other_base, questions]\n",
+                gap,
+            ),
+            (
+                "a record inlining it, class-ranged there",
+                "  Section:\n    slots: [target_schema, questions]\n    \
+                 slot_usage:\n      target_schema: {range: Profile}\n",
+                gap,
+            ),
+        ];
+        for (case, classes, expected) in cases {
+            let v = validate_record(
+                &anchored_with(classes),
+                "Question",
+                &data("{id: q1, expected_anchors: [cabernet]}"),
+            )
+            .expect("Question is declared");
+            assert_eq!(records_and_kinds(&v), expected, "the base slot on {case}");
+        }
     }
 
     #[test]
