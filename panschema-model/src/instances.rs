@@ -248,10 +248,10 @@ enum ClassChoice {
     WrappedDict,
 }
 
-/// The shape left on a record for a dict of records none of whose entries
-/// built: it keeps the slot authored, and `verify` reports only the
-/// unusable entries beside it.
-pub(crate) const UNUSABLE_DICT_SHAPE: &str = "an identifier-keyed dict";
+/// The shape left in a slot whose records all failed to load, each entry
+/// reported unusable: it keeps the slot authored, and `verify` reports
+/// only the unusable entries beside it.
+pub(crate) const UNUSABLE_ENTRIES_SHAPE: &str = "a collection of unusable entries";
 
 /// Why a null among a class slot's records is refused, phrased to follow
 /// "entry …".
@@ -285,8 +285,61 @@ fn leaves_dataset(
     points_outside_dataset(schema, target) && !anonymous_ids.contains(target)
 }
 
+/// What one class-ranged container slot carried.
+struct ContainedSlot {
+    slot: String,
+    /// Each record's id, paired with whether the edge is containment.
+    ids: Vec<(String, bool)>,
+    /// Whether every entry was reported unusable, so none loaded.
+    all_unusable: bool,
+}
+
+/// Give the container `inst` an edge to each record its class-ranged
+/// slots held, by slot, and the unusable-entries shape in each slot
+/// whose entries were all reported unusable.
+fn attach_contained(
+    schema: &SchemaDefinition,
+    anonymous_ids: &std::collections::HashSet<String>,
+    inst: &mut Instance,
+    contained: Vec<ContainedSlot>,
+) {
+    for ContainedSlot {
+        slot,
+        ids,
+        all_unusable,
+    } in contained
+    {
+        if all_unusable {
+            push_slot_value(
+                &mut inst.slot_values,
+                &slot,
+                InstanceValue::Unexpected(UNUSABLE_ENTRIES_SHAPE),
+            );
+        }
+        for (id, held) in ids {
+            inst.references.push(Reference {
+                property: slot.clone(),
+                target: id.clone(),
+                external: leaves_dataset(schema, anonymous_ids, &id),
+            });
+            push_slot_value(
+                &mut inst.slot_values,
+                &slot,
+                InstanceValue::Reference { target: id, held },
+            );
+        }
+    }
+    inst.references
+        .sort_by(|a, b| (&a.property, &a.target).cmp(&(&b.property, &b.target)));
+    inst.slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
+}
+
 /// How a record read on its own is named when it has no identifier.
 const LONE_RECORD: &str = "(record)";
+
+/// How the dataset itself is named in a finding about it, and the name of
+/// a container that authors no identifier when its own fields are read.
+pub(crate) const DATASET: &str = "(root)";
 
 /// The place of `slot`'s value: on the record `holder`, or on a vessel
 /// root, which has no id to place it under.
@@ -391,6 +444,11 @@ pub struct InstanceSet {
     /// marked held (containment by role), so citation-oriented consumers
     /// need no special case for it.
     pub root_record: Option<String>,
+    /// The fields of a container that authors no identifier, read as a
+    /// record named `(root)`: it is no record of the dataset and nothing
+    /// emits it, but validation checks it as it checks any record. `None`
+    /// when the container is a record (`root_record`) or there is none.
+    pub vessel: Option<Instance>,
     /// Container-collection entries that loaded no record, with why —
     /// reported by validation so the entries stay visible even when no
     /// container record exists to carry them. Empty for readers that
@@ -444,6 +502,12 @@ pub enum KeyKind {
 }
 
 impl InstanceSet {
+    /// Every record a check reads: the fields of a container that is no
+    /// record (`vessel`) first, as `(root)` sorts first, then the records.
+    pub fn checked_records(&self) -> impl Iterator<Item = &Instance> {
+        self.vessel.iter().chain(&self.instances)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.instances.is_empty()
     }
@@ -578,6 +642,7 @@ impl InstanceSet {
             external_references: Vec::new(),
             root: None,
             root_record: None,
+            vessel: None,
             root_collision: None,
             root_candidates: None,
             unusable_collection_entries: Vec::new(),
@@ -629,26 +694,20 @@ impl InstanceSet {
             .and_then(scalar_value)
             .map(|s| scalar_to_display(&s));
         let authored_identifier = authored_root_id.is_some();
-        // What each class-ranged container slot carried, so a root that is
-        // itself a record can reference those records under that slot's
-        // name — each id paired with whether the edge is containment.
-        let mut contained: Vec<(String, Vec<(String, bool)>)> = Vec::new();
-        // The root's own non-collection fields, replayed through the normal
-        // record builder rather than reimplementing id/label/scalar handling.
+        // How findings about the container name it.
+        let root_in_findings = authored_root_id.as_deref().unwrap_or(DATASET);
+        // What each class-ranged container slot carried, so the container
+        // can reference those records under that slot's name.
+        let mut contained: Vec<ContainedSlot> = Vec::new();
+        // The root's own non-collection fields, read by the normal record
+        // builder rather than reimplementing id/label/scalar handling.
         let mut root_fields = serde_norway::Mapping::new();
 
         // The root's own expansion declarations govern its metadata card
-        // exactly as its record view. The identified root's replay through
-        // `build_record` owns gap reporting; a vessel root's bare value
-        // with no usable base stays as authored here, silently — dataset
-        // description, not record data.
-        let root_frame = loader.expand_frame(
-            authored_root_id.as_deref().unwrap_or(root_name),
-            container,
-            &root_resolved,
-            None,
-            None,
-        );
+        // exactly as its record view. Reading the root's fields as a record
+        // below owns gap reporting, so the metadata reports nothing.
+        let root_frame =
+            loader.expand_frame(root_in_findings, container, &root_resolved, None, None);
         loader.expand_scope.push(root_frame);
         let root_expansions = loader.expansions.clone();
         let root_types = [root_name.to_string()];
@@ -667,13 +726,7 @@ impl InstanceSet {
         };
         for (key, value) in container {
             let Some(slot_name) = key.as_str() else {
-                loader.note_non_string_key(
-                    authored_root_id
-                        .clone()
-                        .unwrap_or_else(|| root_name.clone()),
-                    root_name,
-                    key,
-                );
+                loader.note_non_string_key(root_in_findings.to_string(), root_name, key);
                 continue;
             };
             let Some(resolved) = root_resolved.get(slot_name) else {
@@ -706,73 +759,63 @@ impl InstanceSet {
             // joined list when every element is a scalar.
             let multivalued = crate::linkml_resolve::effective_cardinality(slot).multivalued;
             loader.place = place_in(authored_root_id.as_deref(), slot_name);
-            if is_record_collection(multivalued, &class_targets, all_classes) {
-                // A collection holds its records by role, however each
-                // entry is spelled; a union of classes chooses each entry's
-                // member individually. A union mixing several classes with
-                // types falls through to record-level rules instead — a
-                // scalar there could legitimately be a literal.
-                let root_record = authored_root_id
-                    .clone()
-                    .unwrap_or_else(|| root_name.clone());
-                let expanded_storage;
-                let value: &serde_norway::Value = match loader.expand_root_class_value(
-                    root_name,
-                    slot_name,
-                    container,
-                    value,
-                    &root_record,
-                ) {
-                    Some(expanded) => {
-                        expanded_storage = expanded;
-                        &expanded_storage
-                    }
-                    None => value,
-                };
-                let ids = loader.collect_collection(
-                    slot_name,
-                    slot,
-                    &authored_root_id,
-                    &class_targets,
-                    value,
-                );
-                contained.push((slot_name.to_string(), ids));
-            } else if class_targets.len() == 1 {
-                // Single-valued: the collection arm above took every
-                // multivalued shape.
-                let range = class_targets[0].clone();
-                let root_record = authored_root_id
-                    .clone()
-                    .unwrap_or_else(|| root_name.clone());
-                let expanded_storage;
-                let value: &serde_norway::Value = match loader.expand_root_class_value(
-                    root_name,
-                    slot_name,
-                    container,
-                    value,
-                    &root_record,
-                ) {
-                    Some(expanded) => {
-                        expanded_storage = expanded;
-                        &expanded_storage
-                    }
-                    None => value,
-                };
-                contained.push((
-                    slot_name.to_string(),
-                    loader.collect_single(slot_name, slot, &authored_root_id, &range, value),
-                ));
+            let collection = is_record_collection(multivalued, &class_targets, all_classes);
+            let union = !collection && class_targets.len() > 1;
+            let mixed = !class_targets.is_empty() && !all_classes;
+            if mixed || (union && authored_identifier) {
+                // Read with the container's own fields, the authored keys
+                // choosing each value's member per record-level rules: on a
+                // container that is a record, and wherever a range mixing
+                // classes with types could hold a literal.
+                root_fields.insert(key.clone(), value.clone());
             } else if !class_targets.is_empty() {
-                if authored_identifier {
-                    // The field replays through the record builder on the
-                    // emitted container, the authored keys choosing each
-                    // value's member per record-level rules.
-                    root_fields.insert(key.clone(), value.clone());
+                let expanded_storage;
+                let value: &serde_norway::Value = match loader.expand_root_class_value(
+                    root_name,
+                    slot_name,
+                    container,
+                    value,
+                    root_in_findings,
+                ) {
+                    Some(expanded) => {
+                        expanded_storage = expanded;
+                        &expanded_storage
+                    }
+                    None => value,
+                };
+                let unusable_before = loader.unusable_entries.len();
+                let ids = if collection {
+                    // A collection holds its records by role, however each
+                    // entry is spelled; a union of classes chooses each
+                    // entry's member individually.
+                    loader.collect_collection(
+                        slot_name,
+                        slot,
+                        &authored_root_id,
+                        &class_targets,
+                        value,
+                    )
+                } else if union {
+                    // A container that is no record holds these as it holds
+                    // its collections' records: top-level, not read as
+                    // records nested in its own fields.
+                    loader.collect_union_records(slot_name, slot, &class_targets, value)
                 } else {
-                    // No container record will exist to replay through, but
-                    // the records are still data — build them.
-                    loader.collect_union_records(slot_name, &class_targets, value);
-                }
+                    // Single-valued: the collection arm took every
+                    // multivalued shape.
+                    loader.collect_single(
+                        slot_name,
+                        slot,
+                        &authored_root_id,
+                        class_targets[0],
+                        value,
+                    )
+                };
+                contained.push(ContainedSlot {
+                    slot: slot_name.to_string(),
+                    all_unusable: ids.is_empty() && loader.unusable_entries.len() > unusable_before,
+                    ids,
+                });
             } else {
                 let display = match value {
                     serde_norway::Value::Sequence(items) => items
@@ -803,8 +846,17 @@ impl InstanceSet {
         // the instance count, and every key-scoped IRI with it.
         let mut emitted_root_id: Option<String> = None;
         let mut root_collision: Option<String> = None;
-        if authored_identifier {
-            let root_value = serde_norway::Value::Mapping(root_fields);
+        let mut vessel = None;
+        let root_value = serde_norway::Value::Mapping(root_fields);
+        if !authored_identifier {
+            // LinkML checks the container's fields whether or not it is a
+            // record (`conformance/probe_vessel_fields.py`), so they are read
+            // as one, kept apart from the records it holds.
+            if let Some(mut fields) = loader.read_record(root_name, None, &root_value, true) {
+                attach_contained(schema, &loader.anonymous_ids, &mut fields, contained);
+                vessel = Some(fields);
+            }
+        } else {
             match loader.build_record(root_name, None, &root_value) {
                 // The container's id is already some record's id. Attaching
                 // the container's edges to that record would silently make
@@ -816,27 +868,7 @@ impl InstanceSet {
                 }
                 Some((root_id, true)) => {
                     if let Some(inst) = loader.instances.iter_mut().find(|i| i.id == root_id) {
-                        for (slot, ids) in &contained {
-                            for (id, held) in ids {
-                                inst.references.push(Reference {
-                                    property: slot.clone(),
-                                    target: id.clone(),
-                                    external: leaves_dataset(schema, &loader.anonymous_ids, id),
-                                });
-                                push_slot_value(
-                                    &mut inst.slot_values,
-                                    slot,
-                                    InstanceValue::Reference {
-                                        target: id.clone(),
-                                        held: *held,
-                                    },
-                                );
-                            }
-                        }
-                        inst.references.sort_by(|a, b| {
-                            (&a.property, &a.target).cmp(&(&b.property, &b.target))
-                        });
-                        inst.slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
+                        attach_contained(schema, &loader.anonymous_ids, inst, contained);
                     }
                     emitted_root_id = Some(root_id);
                 }
@@ -885,6 +917,7 @@ impl InstanceSet {
             metadata,
             root: Some(root_name.clone()),
             root_record: emitted_root_id,
+            vessel,
             root_collision,
             ..loader.into_set()
         }
@@ -1108,8 +1141,9 @@ struct LinkmlLoader<'a> {
     /// slot with a running count, carried to the set in key order.
     undeclared_inlinings: std::collections::BTreeMap<(Option<String>, String), UndeclaredInlining>,
     /// The id of the record whose fields are being ingested, so a finding
-    /// raised below it can name its holder; `None` between records — a
-    /// collection on the dataset container or a vessel root.
+    /// raised below it can name its holder; `None` between records (a
+    /// collection on the dataset container) and while the fields of a
+    /// container that is no record are read.
     current_holder: Option<String>,
     /// Where the value being read sits in the data: the id of the record
     /// holding it (none under a vessel root), the slot, then `[n]` for
@@ -1167,6 +1201,8 @@ impl<'a> LinkmlLoader<'a> {
         self.undeclared_fields.dedup();
         self.expansion_gaps.sort();
         self.expansion_gaps.dedup();
+        // A container that is no record emits no edge, so none of its
+        // references leaves the dataset's graph.
         let mut external_references: Vec<ExternalReference> = self
             .instances
             .iter()
@@ -1205,6 +1241,14 @@ impl<'a> LinkmlLoader<'a> {
         let out = read(self);
         self.place.truncate(outer);
         out
+    }
+
+    /// The record a finding about the field being read names: its holder,
+    /// or the dataset when the container that is no record holds it.
+    fn holder_in_findings(&self) -> String {
+        self.current_holder
+            .clone()
+            .unwrap_or_else(|| DATASET.to_string())
     }
 
     fn leaves_dataset(&self, target: &str) -> bool {
@@ -1812,43 +1856,63 @@ impl<'a> LinkmlLoader<'a> {
         }
     }
 
-    /// Build the records of a union field that cannot replay through a
-    /// container record — a vessel root's single-valued union slot, or
-    /// its mixed class-and-type union: a mapping naming one member
-    /// materializes; nothing else has a holder to be recorded on.
+    /// Read the single-valued union of classes on a container that is no
+    /// record: a mapping naming one member is built, a string cites a
+    /// record by its id, and anything else is reported. Returns each id
+    /// with whether the edge is containment.
     fn collect_union_records(
         &mut self,
         slot: &str,
+        slot_def: &crate::linkml::SlotDefinition,
         candidates: &[&String],
         value: &serde_norway::Value,
-    ) {
+    ) -> Vec<(String, bool)> {
         match value {
             serde_norway::Value::Sequence(items) => {
+                let mut ids = Vec::new();
                 for (index, item) in items.iter().enumerate() {
-                    self.at_entry(index, |loader| {
-                        loader.collect_union_records(slot, candidates, item);
-                    });
+                    ids.extend(self.at_entry(index, |loader| {
+                        loader.collect_union_records(slot, slot_def, candidates, item)
+                    }));
                 }
+                ids
             }
-            serde_norway::Value::Mapping(map) => match self.disambiguate_class(candidates, map) {
-                ClassChoice::One(class) => {
-                    if let Some((id, _)) = self.build_record(&class, None, value) {
-                        self.note_top_level_id(id);
+            serde_norway::Value::Mapping(map) => {
+                let reason = match self.disambiguate_class(candidates, map) {
+                    ClassChoice::One(class) => {
+                        return match self.build_record(&class, None, value) {
+                            Some((id, materialized)) => {
+                                self.note_top_level_id(id.clone());
+                                self.note_inline_records(None, slot_def, slot, candidates, 1);
+                                vec![(id, materialized)]
+                            }
+                            None => Vec::new(),
+                        };
                     }
-                }
-                ClassChoice::Ambiguous => {
-                    self.note_unusable(slot, None, UNION_AMBIGUITY_REASON.to_string())
-                }
-                ClassChoice::WrappedDict => {
-                    self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string())
-                }
-            },
+                    ClassChoice::Ambiguous => UNION_AMBIGUITY_REASON,
+                    ClassChoice::WrappedDict => WRAPPED_DICT_REASON,
+                };
+                self.note_unusable(slot, None, reason.to_string());
+                Vec::new()
+            }
+            // A string is a reference to a member's record by its id.
+            serde_norway::Value::String(id) => vec![(id.clone(), false)],
             // The container skips a slot set to null, so this one is a
             // list element.
             serde_norway::Value::Null => {
-                self.note_unusable(slot, None, NULL_ENTRY_REASON.to_string())
+                self.note_unusable(slot, None, NULL_ENTRY_REASON.to_string());
+                Vec::new()
             }
-            _ => {}
+            // LinkML refuses any other scalar at a union of classes
+            // (`conformance/probe_vessel_fields.py`).
+            other => {
+                self.note_unusable(
+                    slot,
+                    None,
+                    format!("is {}, not a record or a record's id", yaml_kind(other)),
+                );
+                Vec::new()
+            }
         }
     }
 
@@ -2183,6 +2247,61 @@ impl<'a> LinkmlLoader<'a> {
         dict_key: Option<&str>,
         record: &serde_norway::Value,
     ) -> Option<(String, bool)> {
+        let read = self.read_record(class_name, dict_key, record, false)?;
+        let id = read.id.clone();
+        if read.anonymous {
+            self.anonymous_ids.insert(id.clone());
+        }
+        let materialized = self.seen.insert(id.clone());
+        if materialized {
+            self.instances.push(read);
+        } else if let Some(existing) = self.instances.iter().find(|i| i.id == id) {
+            // Restating an existing record is fine only when nothing is
+            // lost: the same record authored identically in two places is
+            // one entity referenced two ways. A different class, or values
+            // the kept record does not carry, mean a second definition was
+            // discarded — report the id rather than let content vanish.
+            let class_conflict = existing.types != read.types;
+            let value_kept = |slot: &str, v: &InstanceValue| {
+                existing
+                    .slot_values
+                    .iter()
+                    .find(|e| e.slot == slot)
+                    .is_some_and(|e| {
+                        e.values.iter().any(|kept| match (v, kept) {
+                            // Containment vs citation is a spelling of the
+                            // same edge, not a content difference.
+                            (
+                                InstanceValue::Reference { target: a, .. },
+                                InstanceValue::Reference { target: b, .. },
+                            ) => a == b,
+                            _ => v == kept,
+                        })
+                    })
+            };
+            let content_lost = read
+                .slot_values
+                .iter()
+                .any(|sv| sv.values.iter().any(|v| !value_kept(&sv.slot, v)));
+            if class_conflict || content_lost {
+                self.note_duplicate_id(id.clone());
+            }
+        }
+        Some((id, materialized))
+    }
+
+    /// One record of `class_name`, read but not yet materialized: its
+    /// nested records are built, and the findings about its fields noted.
+    /// `vessel` reads the dataset container that is no record: it is
+    /// named `(root)` whatever key it authors, and what sits in its
+    /// fields is named as under any container slot, with no holder.
+    fn read_record(
+        &mut self,
+        class_name: &str,
+        dict_key: Option<&str>,
+        record: &serde_norway::Value,
+        vessel: bool,
+    ) -> Option<Instance> {
         self.schema.classes.get(class_name)?;
         let map = record.as_mapping()?;
         // LinkML's single-class designator use: the record instantiates
@@ -2228,11 +2347,13 @@ impl<'a> LinkmlLoader<'a> {
                     })
             })
         });
+        let authored_id = authored_id.filter(|_| !vessel);
         let anonymous = authored_id.is_none();
-        let id = authored_id.unwrap_or_else(|| place.clone());
-        if anonymous {
-            self.anonymous_ids.insert(id.clone());
-        }
+        let id = match authored_id {
+            Some(id) => id,
+            None if vessel => DATASET.to_string(),
+            None => place.clone(),
+        };
         let label = string_field(label_slot.as_deref()).unwrap_or_else(|| {
             if anonymous {
                 id.clone()
@@ -2244,7 +2365,8 @@ impl<'a> LinkmlLoader<'a> {
         let mut literals: Vec<(String, String)> = Vec::new();
         let mut references: Vec<Reference> = Vec::new();
         let mut slot_values: Vec<SlotValue> = Vec::new();
-        let previous_holder = self.current_holder.replace(id.clone());
+        let holder = (!vessel).then(|| id.clone());
+        let previous_holder = std::mem::replace(&mut self.current_holder, holder);
         let frame = self.expand_frame(&id, map, &resolved, dict_key, id_slot.as_deref());
         self.expand_scope.push(frame);
         let types_of_record = [class_name.to_string()];
@@ -2328,7 +2450,7 @@ impl<'a> LinkmlLoader<'a> {
                     resolved,
                 }
             });
-            self.place = place_in(Some(&id), field);
+            self.place = place_in(self.current_holder.as_deref(), field);
             self.ingest_field(
                 field,
                 &ranges,
@@ -2360,54 +2482,20 @@ impl<'a> LinkmlLoader<'a> {
         references.sort_by(|a, b| (&a.property, &a.target).cmp(&(&b.property, &b.target)));
         slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
 
-        let materialized = self.seen.insert(id.clone());
-        if materialized {
-            self.instances.push(Instance {
-                id: id.clone(),
-                iri: None,
-                uri_unresolved: false,
-                label,
-                description: string_field(Some("description")),
-                types: vec![class_name.to_string()],
-                literals,
-                references,
-                slot_values,
-                // Set once the dataset's root is known, not here.
-                scope: None,
-                anonymous,
-            });
-        } else if let Some(existing) = self.instances.iter().find(|i| i.id == id) {
-            // Restating an existing record is fine only when nothing is
-            // lost: the same record authored identically in two places is
-            // one entity referenced two ways. A different class, or values
-            // the kept record does not carry, mean a second definition was
-            // discarded — report the id rather than let content vanish.
-            let class_conflict = existing.types != [class_name.to_string()];
-            let value_kept = |slot: &str, v: &InstanceValue| {
-                existing
-                    .slot_values
-                    .iter()
-                    .find(|e| e.slot == slot)
-                    .is_some_and(|e| {
-                        e.values.iter().any(|kept| match (v, kept) {
-                            // Containment vs citation is a spelling of the
-                            // same edge, not a content difference.
-                            (
-                                InstanceValue::Reference { target: a, .. },
-                                InstanceValue::Reference { target: b, .. },
-                            ) => a == b,
-                            _ => v == kept,
-                        })
-                    })
-            };
-            let content_lost = slot_values
-                .iter()
-                .any(|sv| sv.values.iter().any(|v| !value_kept(&sv.slot, v)));
-            if class_conflict || content_lost {
-                self.note_duplicate_id(id.clone());
-            }
-        }
-        Some((id, materialized))
+        Some(Instance {
+            id,
+            iri: None,
+            uri_unresolved: false,
+            label,
+            description: string_field(Some("description")),
+            types: vec![class_name.to_string()],
+            literals,
+            references,
+            slot_values,
+            // Set once the dataset's root is known, not here.
+            scope: None,
+            anonymous,
+        })
     }
 
     /// Route one slot value into the typed `slot_values` (always) and, when
@@ -2525,7 +2613,7 @@ impl<'a> LinkmlLoader<'a> {
                 if let Some(expand_base) = expand
                     && !entries.is_empty()
                 {
-                    let record = self.current_holder.clone().unwrap_or_default();
+                    let record = self.holder_in_findings();
                     self.note_expansion_gap(
                         &record,
                         slot,
@@ -2540,7 +2628,7 @@ impl<'a> LinkmlLoader<'a> {
                     push_slot_value(
                         slot_values,
                         slot,
-                        InstanceValue::Unexpected(UNUSABLE_DICT_SHAPE),
+                        InstanceValue::Unexpected(UNUSABLE_ENTRIES_SHAPE),
                     );
                 }
                 for (target, materialized) in entries {
@@ -2562,7 +2650,7 @@ impl<'a> LinkmlLoader<'a> {
                                 self.note_inline_records(holder, def, slot, &class_targets, 1);
                             }
                             if let Some(expand_base) = expand {
-                                let record = self.current_holder.clone().unwrap_or_default();
+                                let record = self.holder_in_findings();
                                 self.note_expansion_gap(
                                     &record,
                                     slot,
@@ -2587,7 +2675,7 @@ impl<'a> LinkmlLoader<'a> {
                         push_slot_value(
                             slot_values,
                             slot,
-                            InstanceValue::Unexpected(UNUSABLE_DICT_SHAPE),
+                            InstanceValue::Unexpected(UNUSABLE_ENTRIES_SHAPE),
                         );
                     }
                 }
@@ -2598,7 +2686,7 @@ impl<'a> LinkmlLoader<'a> {
             // namespace (the declaration only binds when no local record
             // of the range class can exist, so nothing is shadowed).
             serde_norway::Value::String(text) if all_classes => {
-                let record = self.current_holder.clone().unwrap_or_default();
+                let record = self.holder_in_findings();
                 let target = self
                     .expand_bare(expand, slot, &record, text, true)
                     .unwrap_or_else(|| text.clone());
@@ -2619,7 +2707,7 @@ impl<'a> LinkmlLoader<'a> {
                 if let Some(scalar) = scalar_value(other) {
                     let scalar = match scalar {
                         ScalarValue::String(bare) => {
-                            let record = self.current_holder.clone().unwrap_or_default();
+                            let record = self.holder_in_findings();
                             match self.expand_bare(expand, slot, &record, &bare, false) {
                                 Some(expanded) => ScalarValue::String(expanded),
                                 None => ScalarValue::String(bare),
@@ -3270,6 +3358,53 @@ mod tests {
             vec![("q_dict", ExpansionGapKind::InlineRecord)],
             "the dict spelling is the same one finding; got: {:?}",
             set.expansion_gaps
+        );
+    }
+
+    #[test]
+    fn a_container_with_no_identifier_expands_its_own_values() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [target_schema, pick, homepage]\n  \
+             DomainRecord:\n    slots: [id]\n  Other:\n    slots: [id]\nslots:\n  id: \
+             {identifier: true}\n  target_schema: {range: uri}\n  pick:\n    any_of: [{range: \
+             DomainRecord}, {range: Other}]\n    annotations:\n      expand_against: \
+             target_schema\n  homepage:\n    range: uri\n    annotations:\n      \
+             expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("target_schema: https://ns.example/\npick: cabernet\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let vessel = set
+            .vessel
+            .as_ref()
+            .expect("the container's fields are read");
+        assert_eq!(
+            vessel.values_at("pick").collect::<Vec<_>>(),
+            vec![&InstanceValue::Reference {
+                target: "https://ns.example/cabernet".into(),
+                held: false
+            }],
+            "a bare id at the container's union expands against its base"
+        );
+        assert_eq!(
+            set.external_references,
+            vec![],
+            "a container that is no record emits no edge to leave the dataset by"
+        );
+
+        let missing: serde_norway::Value =
+            serde_norway::from_str("pick: cabernet\nhomepage: home\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &missing);
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.record.as_str(), g.slot.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(DATASET, "homepage"), (DATASET, "pick")],
+            "the container's own fields report their gaps as a record's do"
         );
     }
 
@@ -4502,6 +4637,168 @@ classes:
         );
     }
 
+    const VESSEL_DEPOT: &str = "\
+name: Estate
+default_range: string
+classes:
+  Depot:
+    tree_root: true
+    attributes:
+      title: {}
+      shelves: {range: Shelf, multivalued: true, inlined_as_list: true}
+      pick: {inlined: true, any_of: [{range: Shelf}, {range: Crate}]}
+      either: {any_of: [{range: Shelf}, {range: Crate}, {range: integer}]}
+      featured: {range: Shelf}
+  Shelf:
+    attributes:
+      id: {identifier: true}
+  Crate:
+    attributes:
+      id: {identifier: true}
+      weight: {range: integer}
+";
+
+    #[test]
+    fn a_container_with_no_identifier_is_read_as_a_record_nothing_emits() {
+        let schema: SchemaDefinition = serde_norway::from_str(VESSEL_DEPOT).expect("schema");
+        let read = |yaml: &str| {
+            InstanceSet::from_linkml_data(&schema, &serde_norway::from_str(yaml).expect("data"))
+        };
+        let set = read("title: T\nshelves:\n  - id: s1\npick: s1\neither: 42\n");
+        let vessel = set
+            .vessel
+            .as_ref()
+            .expect("the container's fields are read");
+        assert_eq!(
+            (vessel.id.as_str(), vessel.types.as_slice()),
+            (DATASET, ["Depot".to_string()].as_slice()),
+            "the container is read as a record of its class, named for the dataset"
+        );
+        let values = |slot: &str| vessel.values_at(slot).cloned().collect::<Vec<_>>();
+        assert_eq!(
+            values("title"),
+            vec![InstanceValue::Scalar(ScalarValue::String("T".into()))]
+        );
+        assert_eq!(
+            values("shelves"),
+            vec![InstanceValue::Reference {
+                target: "s1".into(),
+                held: true
+            }],
+            "a collection's record is held by the container"
+        );
+        assert_eq!(
+            values("pick"),
+            vec![InstanceValue::Reference {
+                target: "s1".into(),
+                held: false
+            }],
+            "an id at a union of classes cites its record"
+        );
+        assert_eq!(
+            values("either"),
+            vec![InstanceValue::Scalar(ScalarValue::Integer(42))],
+            "a number at a union that also allows integers is a literal"
+        );
+        assert_eq!(
+            set.checked_records()
+                .map(|i| i.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![DATASET, "s1"],
+            "the container is checked first and not emitted"
+        );
+        assert_eq!(
+            set.instances
+                .iter()
+                .map(|i| i.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s1"],
+            "the container is not emitted"
+        );
+
+        let set = read("pick: {id: c1, weight: 2}\n");
+        assert_eq!(
+            set.vessel
+                .as_ref()
+                .map(|v| v.values_at("pick").cloned().collect::<Vec<_>>()),
+            Some(vec![InstanceValue::Reference {
+                target: "c1".into(),
+                held: true
+            }]),
+            "a record at a union of classes is held by the container"
+        );
+        assert!(
+            set.instances.iter().any(|i| i.id == "c1"),
+            "the record is built; got: {:?}",
+            set.instances
+        );
+
+        let set = read("shelves:\n  - id: 7\nfeatured: 7\n");
+        assert_eq!(
+            set.vessel
+                .as_ref()
+                .map(|v| v.values_at("featured").cloned().collect::<Vec<_>>()),
+            Some(vec![InstanceValue::Reference {
+                target: "7".into(),
+                held: false
+            }]),
+            "a number at a single class range cites the record it names, as an id it names"
+        );
+
+        let set = read("either: {weight: 2}\n");
+        assert_eq!(
+            set.instances
+                .iter()
+                .map(|i| (i.id.as_str(), i.types.as_slice()))
+                .collect::<Vec<_>>(),
+            vec![("either", ["Crate".to_string()].as_slice())],
+            "a record in the container's own fields is named as under any container slot"
+        );
+    }
+
+    #[test]
+    fn a_container_that_is_no_record_is_named_root_whatever_key_it_sets() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "name: Estate\ndefault_range: string\nclasses:\n  Depot:\n    tree_root: true\n    \
+             attributes:\n      name: {key: true}\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("name: acme\nextra: 1\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(set.vessel.as_ref().map(|v| v.id.as_str()), Some(DATASET));
+        assert_eq!(
+            set.undeclared_fields
+                .iter()
+                .map(|u| (u.record.as_str(), u.field.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(DATASET, "extra")]
+        );
+    }
+
+    #[test]
+    fn a_container_is_a_record_only_when_it_sets_its_identifier() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            &VESSEL_DEPOT.replace("      title:", "      id: {identifier: true}\n      title:"),
+        )
+        .expect("schema");
+        let read = |yaml: &str| {
+            InstanceSet::from_linkml_data(&schema, &serde_norway::from_str(yaml).expect("data"))
+        };
+        assert_eq!(
+            read("id: d1\ntitle: T\n").vessel,
+            None,
+            "a container with an id is a record"
+        );
+        assert_eq!(
+            read("title: T\n")
+                .vessel
+                .map(|v| v.values_at("title").cloned().collect::<Vec<_>>()),
+            Some(vec![InstanceValue::Scalar(ScalarValue::String("T".into()))]),
+            "a container that leaves its id blank is no record, and its fields are read"
+        );
+    }
+
     #[test]
     fn records_of_a_vessel_root_mint_exactly_as_before() {
         // Scoping is off by default: a root with no identifier is not a
@@ -5423,7 +5720,7 @@ buildings:
                 && sv
                     .values
                     .iter()
-                    .any(|v| matches!(v, InstanceValue::Unexpected(UNUSABLE_DICT_SHAPE)))),
+                    .any(|v| matches!(v, InstanceValue::Unexpected(UNUSABLE_ENTRIES_SHAPE)))),
             "the authored-but-unusable value is present on the record; got: {:?}",
             b3.slot_values
         );

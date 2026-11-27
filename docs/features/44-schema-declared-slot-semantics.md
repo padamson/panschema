@@ -522,10 +522,12 @@ RDF must carry them (see Open Questions for the vocabulary).
   prefix surfaces through the resolution checks rather than expanding
   into a wrong IRI.
 - A vessel root (no authored identifier) shows its metadata expanded
-  when the base is usable, but its scalar metadata reports no gap —
-  dataset description, not record data. Class-ranged root slots expand
-  with full parity (references, gaps, inline findings) whether or not
-  the root is identified.
+  when the base is usable. Its own fields are read as a record that
+  nothing emits, as LinkML checks them
+  (`conformance/probe_vessel_fields.py`), so a bare scalar with no
+  usable base is a gap on `(root)`. Class-ranged root slots expand with
+  full parity (references, gaps, inline findings) whether or not the
+  root is identified.
 
 - The annotation spellings are the value-wrapped form #127 requires for
   structured values; `expand_against` is a plain string annotation.

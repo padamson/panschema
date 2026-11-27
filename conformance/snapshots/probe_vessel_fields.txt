@@ -1,0 +1,31 @@
+== conforming
+   validate: No issues found
+== a null in the container's list of scalars
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not of type 'string' in /notes/1
+== an object at the container's scalar slot
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] {'a': 1} is not of type 'array', 'null' in /notes
+== a wrong-kind value at the container's integer slot
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'abc' is not of type 'integer', 'null' in /count
+== a field the container does not declare
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] Additional properties are not allowed ('extra' was unexpected) in /
+== a bare number at the container's union of classes
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 42 is not valid under any of the given schemas in /pick
+== an id at the container's union of classes
+   validate: No issues found
+== a number at the container's union of classes and integer
+   validate: No issues found
+== a number at the container's union of one class and integer
+   validate: No issues found
+== numbers at the container's list of one class or integer
+   validate: No issues found
+== a record at the container's union of classes
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] {'id': 'c1', 'weight': 2} is not valid under any of the given schemas in /pick
+== a required slot of the container left out
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'title' is a required property in /
+== a number where the container's required collection belongs
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 7 is not of type 'array' in /shelves
+== an empty list at the container's required collection
+   validate: No issues found
+   convert: ValueError: shelves must be supplied
+== a container leaving its declared identifier out
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'id' is a required property in /

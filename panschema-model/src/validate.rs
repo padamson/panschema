@@ -20,10 +20,7 @@ use serde_norway::Value;
 use std::fmt;
 
 use crate::findings::{Finding, kind};
-
-/// What [`Violation::record`] holds for a finding about the dataset
-/// itself, which is no record's.
-const DATASET: &str = "(root)";
+use crate::instances::DATASET;
 
 /// A single way the data fails to conform to the schema.
 #[derive(Debug, Clone, PartialEq)]
@@ -624,7 +621,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     // class that appears in the set once, however many records instantiate it.
     let mut resolved_by_class: std::collections::BTreeMap<&str, _> =
         std::collections::BTreeMap::new();
-    for inst in &set.instances {
+    for inst in set.checked_records() {
         if let Some(class_name) = inst.types.first()
             && let Some(class) = schema.classes.get(class_name)
         {
@@ -634,7 +631,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         }
     }
 
-    for inst in &set.instances {
+    for inst in set.checked_records() {
         // A record's class is the collection slot's range that produced it.
         let Some(class_name) = inst.types.first() else {
             continue;
@@ -774,7 +771,9 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                         // The unusable-entry finding beside it names the
                         // fix; this value exists so the slot reads as
                         // authored — one problem yields one report.
-                        if *shape == crate::instances::UNUSABLE_DICT_SHAPE || slot.designates_type {
+                        if *shape == crate::instances::UNUSABLE_ENTRIES_SHAPE
+                            || slot.designates_type
+                        {
                             continue;
                         }
                         let declared = if ranges.is_empty() {
@@ -2208,7 +2207,7 @@ wineries:
         crate::linkml_resolve::materialize_default_range(&mut schema);
         let stamp = schema.classes.get_mut("Stamp").expect("Stamp");
         stamp.attributes.get_mut("value").expect("value").required = true;
-        validate_instance_data(&schema, &data(yaml))
+        validate_instance_data(&schema, &data(&format!("id: d0\n{yaml}")))
     }
 
     #[test]
@@ -3877,6 +3876,128 @@ classes:
 ";
 
     #[test]
+    fn a_container_with_no_identifier_has_its_own_fields_checked() {
+        // The schema and cases of `conformance/probe_vessel_fields.py`,
+        // each with LinkML's verdict, and a dangling id, which LinkML does
+        // not check.
+        const DEPOT: &str = "\
+name: Estate
+default_range: string
+classes:
+  Depot:
+    tree_root: true
+    attributes:
+      title: {required: true}
+      notes: {multivalued: true}
+      count: {range: integer}
+      shelves: {range: Shelf, multivalued: true, inlined_as_list: true, required: true}
+      pick: {any_of: [{range: Shelf}, {range: Crate}]}
+      either: {any_of: [{range: Shelf}, {range: Crate}, {range: integer}]}
+      one: {any_of: [{range: Shelf}, {range: integer}]}
+      many: {multivalued: true, any_of: [{range: Shelf}, {range: integer}]}
+  Shelf:
+    attributes:
+      id: {identifier: true}
+  Crate:
+    attributes:
+      id: {identifier: true}
+      weight: {range: integer}
+";
+        let schema: SchemaDefinition = serde_norway::from_str(DEPOT).expect("schema");
+        let base = "title: T\nshelves:\n  - id: s1\n";
+        let cases: [(String, Vec<(&str, &str)>); 15] = [
+            (base.to_string(), vec![]),
+            (format!("{base}pick: s1\n"), vec![]),
+            (format!("{base}either: 42\n"), vec![]),
+            (format!("{base}one: 42\n"), vec![]),
+            (format!("{base}many: [1, 2]\n"), vec![]),
+            (
+                format!("{base}pick: {{id: c1, weight: 2}}\n"),
+                vec![(DATASET, kind::UNDECLARED_INLINING)],
+            ),
+            // `linkml-validate` accepts the empty list and the runtime
+            // refuses it; `verify` reads it as the runtime does, as on a
+            // record.
+            (
+                "title: T\nshelves: []\n".to_string(),
+                vec![(DATASET, kind::REQUIRED_SLOT_ABSENT)],
+            ),
+            (
+                format!("{base}pick: s9\n"),
+                vec![(DATASET, kind::DANGLING_REFERENCE)],
+            ),
+            (
+                "title: T\nshelves: 7\n".to_string(),
+                vec![("shelves", kind::UNUSABLE_COLLECTION_ENTRY)],
+            ),
+            (
+                format!("{base}notes: [north, null]\n"),
+                vec![(DATASET, kind::VALUE_SHAPE_OUTSIDE_RANGE)],
+            ),
+            (
+                format!("{base}notes: {{a: 1}}\n"),
+                vec![(DATASET, kind::VALUE_SHAPE_OUTSIDE_RANGE)],
+            ),
+            (
+                format!("{base}count: abc\n"),
+                vec![(DATASET, kind::SCALAR_KIND_OUTSIDE_RANGE)],
+            ),
+            (
+                format!("{base}extra: 1\n"),
+                vec![(DATASET, kind::UNDECLARED_FIELD)],
+            ),
+            (
+                format!("{base}pick: 42\n"),
+                vec![("pick", kind::UNUSABLE_COLLECTION_ENTRY)],
+            ),
+            (
+                base.replace("title: T\n", ""),
+                vec![(DATASET, kind::REQUIRED_SLOT_ABSENT)],
+            ),
+        ];
+        for (yaml, want) in cases {
+            let violations = validate_instance_data(&schema, &data(&yaml));
+            let got: Vec<(&str, &str)> = violations
+                .iter()
+                .map(|v| (v.record.as_str(), Finding::kind(v)))
+                .collect();
+            assert_eq!(got, want, "for:\n{yaml}got: {violations:?}");
+        }
+        let identified: SchemaDefinition = serde_norway::from_str(
+            &DEPOT.replace("      title:", "      id: {identifier: true}\n      title:"),
+        )
+        .expect("schema");
+        assert_eq!(
+            validate_instance_data(&identified, &data(base)),
+            vec![Violation {
+                record: DATASET.to_string(),
+                kind: ViolationKind::RequiredSlotAbsent {
+                    class: "Depot".to_string(),
+                    slot: "id".to_string(),
+                },
+            }],
+            "a container leaving its declared identifier out"
+        );
+        assert_eq!(
+            validate_instance_data(&identified, &data("id: d1\ntitle: T\nshelves: 7\n"))
+                .iter()
+                .map(Finding::kind)
+                .collect::<Vec<_>>(),
+            vec![kind::UNUSABLE_COLLECTION_ENTRY],
+            "a required collection whose entries are unusable is authored, on a container \
+             with an id too"
+        );
+        assert_eq!(
+            validate_instance_data(
+                &identified,
+                &data(&format!("id: d1\n{base}one: 42\nmany: [1, 2]\n"))
+            ),
+            vec![],
+            "a number at a range of one class and integer is a literal there too"
+        );
+    }
+
+    #[test]
     fn a_null_in_a_list_at_a_vessel_roots_single_valued_class_slot_is_reported() {
         let schema: SchemaDefinition = serde_norway::from_str(&VESSEL_UNION_SCHEMA.replace(
             "      things:\n",
@@ -4429,7 +4550,7 @@ classes:
     fn in_a_dataset(record: &str) -> Vec<Violation> {
         validate_instance_data(
             &parcel_schema(),
-            &data(&format!("parcels:\n  - {record}\n")),
+            &data(&format!("id: d0\nparcels:\n  - {record}\n")),
         )
     }
 

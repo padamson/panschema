@@ -1082,7 +1082,7 @@ pub fn dangling_instance_references(
     use std::collections::HashSet;
     let ids: HashSet<&str> = set.instances.iter().map(|i| i.id.as_str()).collect();
     let mut out = Vec::new();
-    for inst in &set.instances {
+    for inst in set.checked_records() {
         for r in &inst.references {
             // A reference that points outside this dataset names no record
             // here by design; reporting it as dangling would make every
@@ -2122,7 +2122,7 @@ pub fn version_pins(
     }
 
     let mut out = VersionVerification::default();
-    for inst in &set.instances {
+    for inst in set.checked_records() {
         for slot_name in declarations.by_slot.keys() {
             let Some(pin) = declarations.governing(&inst.types, slot_name) else {
                 continue;
@@ -2677,7 +2677,10 @@ pub fn count_bounds_exceeded(
     };
     let mut by_id: BTreeMap<&str, &Instance> = BTreeMap::new();
     let mut holder: BTreeMap<&str, &str> = BTreeMap::new();
-    for record in &set.instances {
+    // A record holding another outranks a container that is no record:
+    // that container's collections hold every entry by role, a bare id
+    // included, so it claims a record only when no record holds it.
+    for record in set.instances.iter().chain(&set.vessel) {
         by_id.entry(record.id.as_str()).or_insert(record);
         for value in record.slot_values.iter().flat_map(|sv| &sv.values) {
             if let InstanceValue::Reference { target, held: true } = value {
@@ -2687,7 +2690,7 @@ pub fn count_bounds_exceeded(
     }
     let mut families: BTreeMap<(&str, &str), BTreeSet<String>> = BTreeMap::new();
     let mut out = Vec::new();
-    for record in &set.instances {
+    for record in set.checked_records() {
         let Some(class_name) = record.types.first() else {
             continue;
         };
@@ -2702,7 +2705,7 @@ pub fn count_bounds_exceeded(
                 .get(r.id.as_str())
                 .and_then(|id| by_id.get(id).copied())
         })
-        .take(set.instances.len())
+        .take(set.checked_records().count())
         .collect();
         for bounding_slot in bindings.by_slot.keys() {
             let mut setters = chain.iter().filter_map(|r| {
@@ -3264,7 +3267,7 @@ pub fn value_claims(
     // The slots that count as `among` for a class, resolved once per
     // class and `among` however many containers share them.
     let mut families: BTreeMap<(&str, &str), BTreeSet<String>> = BTreeMap::new();
-    for container in &set.instances {
+    for container in set.checked_records() {
         for slot_name in declarations.by_slot.keys() {
             let Some(claim) = declarations.governing(&container.types, slot_name) else {
                 continue;
@@ -3840,7 +3843,7 @@ pub fn unverified_absences(
     // record whose classes no declaration touches states no claim. The
     // carried set is schema-wide and loop-invariant.
     let carried = carried_slot_names(schema);
-    for inst in &set.instances {
+    for inst in set.checked_records() {
         for slot_name in declarations.by_slot.keys() {
             let Some(governing) = declarations.governing(&inst.types, slot_name) else {
                 continue;
@@ -6547,6 +6550,15 @@ classes:
             stale.mismatched[0].message(),
             "record `b`: `pinned` records version 1.0.0 of `catalog`, which is at 1.1.0"
         );
+        assert_eq!(
+            check("target: catalog\npinned: 1.0.0\n")
+                .mismatched
+                .iter()
+                .map(|m| m.record.as_str())
+                .collect::<Vec<_>>(),
+            vec![crate::instances::DATASET],
+            "a container with no identifier states its pin too"
+        );
         let unnamed = check("id: b\npinned: 1.1.0\n");
         assert!(
             unnamed.uncheckable[0]
@@ -7067,6 +7079,42 @@ classes:
     }
 
     #[test]
+    fn a_bound_on_a_container_with_no_identifier_bounds_what_it_holds() {
+        assert_eq!(
+            exceeded_bounds("capacity: 3\nbins:\n  - {id: b1, items: [a, b, c, d]}\n"),
+            vec![exceeded("b1", "Bin", 4, 3, crate::instances::DATASET)]
+        );
+        let counting_root = parse(&SHELF.replace(
+            "slots: [id, capacity, bins]",
+            "slots: [id, capacity, items, bins]",
+        ));
+        assert_eq!(
+            exceeded_in(&counting_root, "capacity: 1\nitems: [a, b]\n"),
+            vec![exceeded(
+                crate::instances::DATASET,
+                "Shelf",
+                2,
+                1,
+                crate::instances::DATASET
+            )],
+            "the container's own values are counted"
+        );
+        let indexing_root = parse(&SHELF.replace(
+            "slots: [id, capacity, bins]",
+            "slots: [id, capacity, bins, drawers]",
+        ));
+        assert_eq!(
+            exceeded_in(
+                &indexing_root,
+                "bins:\n  - {id: b1, capacity: 3, drawers: [{id: d1, items: [a, b, c, d]}]}\n\
+                 drawers: [d1]\n"
+            ),
+            vec![exceeded("d1", "Drawer", 4, 3, "b1")],
+            "the record holding d1 bounds it, not the container that also lists it"
+        );
+    }
+
+    #[test]
     fn a_value_counts_once_however_often_the_counted_slot_and_its_specializations_hold_it() {
         assert_eq!(
             exceeded_bounds(
@@ -7300,7 +7348,7 @@ classes:
             "id: https://example.org/bench\nname: bench\nprefixes:\n  bench: \
              https://example.org/bench/\n  wine: https://example.org/wine/\ndefault_prefix: bench\n\
              classes:\n  Bench:\n    tree_root: true\n    slots: [id, questions, probes, audits, \
-             reviews]\n  Review:\n    slots: [id, citations, expected_values]\n  Audit:\n    slots: \
+             reviews, anchors, expected_values]\n  Review:\n    slots: [id, citations, expected_values]\n  Audit:\n    slots: \
              [id, urls, checked_values, broken_values, sighted_values]\n  Probe:\n    \
              slots: [id, expected_values]\n  Question:\n    \
              slots: [id, anchors, citations, expected_values]\n  ExpectedValue:\n    slots: [record, \
@@ -7341,6 +7389,34 @@ classes:
             )
         };
         let check = |entry: &str| check_in(std::slice::from_ref(&full), entry);
+
+        let vessel: serde_norway::Value = serde_norway::from_str(
+            "anchors: [wine:bordeaux]\nexpected_values:\n  - {record: wine:bordeaux, slot: color, \
+             value: white}\n",
+        )
+        .expect("yaml");
+        let on_vessel = value_claims(
+            &bench,
+            &crate::instances::InstanceSet::from_linkml_data(&bench, &vessel),
+            &bindings,
+            &SiblingRecords::index(&[SiblingGraph {
+                entry: "wine",
+                schema: &wine,
+                sets: std::slice::from_ref(&full),
+            }]),
+        );
+        assert_eq!(
+            (
+                on_vessel.claims,
+                on_vessel
+                    .failures
+                    .iter()
+                    .map(|f| f.entry.as_str())
+                    .collect::<Vec<_>>()
+            ),
+            (1, vec!["expected_values[0]"]),
+            "a container with no identifier states its claim too: {on_vessel:?}"
+        );
 
         for entry in [
             "{record: wine:bordeaux, slot: color, value: red}",
@@ -8681,6 +8757,23 @@ classes:
             found.unverified[0].message().contains("does not hold"),
             "got: {}",
             found.unverified[0].message()
+        );
+
+        let vessel = scoped_set(&schema, "anchors:\n  - cellar:w1\n  - cellar:f1\n");
+        let found = unverified_absences(
+            &schema,
+            &vessel,
+            &AbsenceBindings::schema_wide("anchors", None),
+            &[sibling_graph(&sibling_schema, &sibling)],
+        );
+        assert_eq!(
+            found
+                .unverified
+                .iter()
+                .map(|u| (u.referrer.as_str(), u.joined_by.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(crate::instances::DATASET, "l1")],
+            "a container with no identifier states its claim too; got: {found:?}"
         );
     }
 

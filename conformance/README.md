@@ -177,6 +177,28 @@ set to `null` as one that names no class, and reading a dict entry's
 `null` body as a record with only its key.
 
 ```bash
+uv run --project conformance conformance/probe_vessel_fields.py
+```
+
+The vessel-fields probe breaks one field at a time of a `tree_root`
+container that declares no identifier (a `null` in its list of scalars,
+an object or a wrong-kind value at a scalar slot, a field its class does
+not declare, a bare number or a record at its union of classes, a
+required slot left out, a number where its required collection belongs)
+and prints `linkml-validate`'s verdict. Each is refused, as on any
+record, the number in place of the collection with one error (`7 is not
+of type 'array'`). An id at the union is accepted, and so is a number at
+a range that also allows integers, whether it joins them with one class
+or two. The tools split on an empty list at the required collection:
+`linkml-validate` accepts it and `linkml-convert`, loading through the
+runtime, refuses it (`shelves must be supplied`). The same container
+declaring an identifier and leaving it out is refused too (`'id' is a
+required property`). It is the evidence behind `verify` checking a
+container's own fields whether or not the container is a record, reading
+an empty list at a required slot as absent, as the runtime does, and
+reporting a record written inline at a union that declares references.
+
+```bash
 uv run --project conformance conformance/probe_metamodel_extension.py
 ```
 
