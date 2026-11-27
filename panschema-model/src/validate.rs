@@ -1084,7 +1084,7 @@ pub enum RecordError {
     #[error("a `{class}` record must be a mapping")]
     NotAMapping { class: String },
     #[error("the record could not be read as data")]
-    Unserializable(#[source] serde_norway::Error),
+    Unserializable(#[source] serde_json::Error),
 }
 
 /// Check one record of `class`, and the records inlined in it, against the
@@ -1093,7 +1093,11 @@ pub enum RecordError {
 /// What lives outside the record is not checked: a reference against the
 /// record it names, and what a record holding this one would state (the
 /// base an `expand_against` slot's bare values join, a `bounds_count_of`
-/// bound). An enum variant reads as its JSON does, a one-key mapping.
+/// bound). The record is read as the JSON `serde_json` writes for it, so a
+/// struct gets the findings its JSON would: a number or boolean map key is
+/// its text, and a float JSON cannot hold (an infinity or a NaN) is null,
+/// so absent. A record with no JSON form (a map with a `None` key) is
+/// [`RecordError::Unserializable`].
 ///
 /// ```
 /// use panschema_model::findings::{Finding, kind};
@@ -1143,7 +1147,7 @@ pub fn validate_record(
     if !schema.classes.contains_key(class) {
         return Err(RecordError::UnknownClass(class.to_string()));
     }
-    let value = as_data(serde_norway::to_value(record).map_err(RecordError::Unserializable)?);
+    let value = yaml_from_json(serde_json::to_value(record).map_err(RecordError::Unserializable)?);
     if value.as_mapping().is_none() {
         return Err(RecordError::NotAMapping {
             class: class.to_string(),
@@ -1155,33 +1159,29 @@ pub fn validate_record(
     Ok(violations)
 }
 
-/// The struct name and field `serde_json` serializes a number under when
-/// its `arbitrary_precision` feature is on.
-const TEXT_NUMBER: &str = "$serde_json::private::Number";
-
-/// A serialized record in the shape its JSON has: an enum variant
-/// `serde_norway` writes as a YAML tag becomes the one-key mapping JSON
-/// writes, and a number `serde_json` carries as text becomes a number.
-fn as_data(value: Value) -> Value {
+/// The data tree a JSON value is, a number as `serde_json` reads its text:
+/// an integer too large for 64 bits is a float.
+/// (`serde_json` writes a float JSON cannot hold, an infinity or a NaN, as
+/// null, so such a value reads as absent.)
+fn yaml_from_json(value: serde_json::Value) -> Value {
     match value {
-        Value::Tagged(tagged) => {
-            let serde_norway::value::TaggedValue { tag, value } = *tagged;
-            let name = tag.to_string().trim_start_matches('!').to_string();
-            let mut variant = serde_norway::Mapping::new();
-            variant.insert(Value::String(name), as_data(value));
-            Value::Mapping(variant)
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .map(serde_norway::Number::from)
+            .or_else(|| n.as_i64().map(serde_norway::Number::from))
+            .or_else(|| n.as_f64().map(serde_norway::Number::from))
+            .map_or_else(|| Value::String(n.to_string()), Value::Number),
+        serde_json::Value::String(text) => Value::String(text),
+        serde_json::Value::Array(items) => {
+            Value::Sequence(items.into_iter().map(yaml_from_json).collect())
         }
-        Value::Mapping(map) => {
-            if map.len() == 1
-                && let Some(Value::String(text)) = map.get(TEXT_NUMBER)
-                && let Ok(number) = text.parse::<serde_norway::Number>()
-            {
-                return Value::Number(number);
-            }
-            Value::Mapping(map.into_iter().map(|(k, v)| (k, as_data(v))).collect())
-        }
-        Value::Sequence(items) => Value::Sequence(items.into_iter().map(as_data).collect()),
-        other => other,
+        serde_json::Value::Object(map) => Value::Mapping(
+            map.into_iter()
+                .map(|(k, v)| (Value::String(k), yaml_from_json(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -4534,22 +4534,6 @@ classes:
         }
     }
 
-    struct Refuses;
-
-    impl serde::Serialize for Refuses {
-        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
-            Err(serde::ser::Error::custom("refused"))
-        }
-    }
-
-    #[test]
-    fn a_value_that_cannot_be_serialized_is_an_error() {
-        match validate_record(&parcel_schema(), "Parcel", &Refuses) {
-            Err(RecordError::Unserializable(_)) => {}
-            other => panic!("expected Unserializable, got {other:?}"),
-        }
-    }
-
     const ANCHORED_SCHEMA: &str = "
 id: https://example.org/bench
 name: bench
@@ -4638,52 +4622,154 @@ slots:
             weight: Measure::Grams(5),
             contents: vec![Measure::Grams(1)],
         };
-        let as_json = serde_json::to_value(&parcel).expect("serialize to JSON");
-        let schema = parcel_schema();
-        let from_json = validate_record(&schema, "Parcel", &as_json).expect("Parcel is declared");
-        assert!(
-            !from_json.is_empty(),
-            "an object where a number belongs breaks the schema; got: {from_json:?}"
-        );
         assert_eq!(
-            validate_record(&schema, "Parcel", &parcel).expect("Parcel is declared"),
-            from_json
+            validate_record(&parcel_schema(), "Parcel", &parcel).expect("Parcel is declared"),
+            in_a_dataset("{id: p1, label: L, weight: {Grams: 5}, contents: [{Grams: 1}]}")
         );
     }
 
-    /// A number as `serde_json` serializes it with its `arbitrary_precision`
-    /// feature, which any crate in a build can turn on.
-    struct TextNumber(&'static str);
+    #[derive(serde::Serialize)]
+    struct RawParcel {
+        id: &'static str,
+        label: &'static str,
+        weight: Box<serde_json::value::RawValue>,
+        contents: Box<serde_json::value::RawValue>,
+    }
 
-    impl serde::Serialize for TextNumber {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            use serde::ser::SerializeStruct;
-            let mut number = serializer.serialize_struct("$serde_json::private::Number", 1)?;
-            number.serialize_field("$serde_json::private::Number", self.0)?;
-            number.end()
+    #[test]
+    fn a_struct_holding_raw_json_gets_the_violations_of_the_json_it_holds() {
+        let raw_json = |text: &str| {
+            serde_json::value::RawValue::from_string(text.to_string()).expect("valid JSON")
+        };
+        let raw = RawParcel {
+            id: "p1",
+            label: "L",
+            weight: raw_json("60"),
+            contents: raw_json(r#"[{"name":"\ud83d\ude00"},{},{}]"#),
+        };
+        assert_eq!(
+            validate_record(&parcel_schema(), "Parcel", &raw).expect("Parcel is declared"),
+            in_a_dataset("{id: p1, label: L, weight: 60, contents: [{name: x}, {}, {}]}")
+        );
+    }
+
+    #[test]
+    fn a_number_reads_as_the_dataset_reads_its_json_spelling() {
+        for (json, yaml) in [
+            ("7", "7"),
+            ("-3", "-3"),
+            ("2.5", "2.5"),
+            ("18446744073709551616", "1.8446744073709552e19"),
+        ] {
+            let body: serde_json::Value = serde_json::from_str(&format!(
+                r#"{{"id": "p1", "label": "L", "weight": {json}}}"#
+            ))
+            .expect("parse JSON");
+            assert_eq!(
+                validate_record(&parcel_schema(), "Parcel", &body).expect("Parcel is declared"),
+                in_a_dataset(&format!("{{id: p1, label: L, weight: {yaml}}}")),
+                "weight: {json}"
+            );
         }
     }
 
     #[derive(serde::Serialize)]
-    struct TextWeighedParcel {
+    struct FloatParcel {
         id: &'static str,
-        label: &'static str,
-        weight: TextNumber,
+        weight: f64,
     }
 
     #[test]
-    fn a_number_serialized_as_text_is_read_as_the_number() {
-        let v = validate_record(
-            &parcel_schema(),
-            "Parcel",
-            &TextWeighedParcel {
-                id: "p1",
-                label: "L",
-                weight: TextNumber("60"),
-            },
-        )
-        .expect("Parcel is declared");
-        assert_eq!(records_and_kinds(&v), vec![("p1", kind::ABOVE_MAXIMUM)]);
+    fn a_float_json_cannot_hold_is_absent() {
+        for weight in [f64::INFINITY, f64::NAN] {
+            assert_eq!(
+                validate_record(
+                    &parcel_schema(),
+                    "Parcel",
+                    &FloatParcel { id: "p1", weight }
+                )
+                .expect("Parcel is declared"),
+                in_a_dataset("{id: p1}"),
+                "weight: {weight}"
+            );
+        }
+    }
+
+    const RACK_SCHEMA: &str = "
+id: https://example.org/racks
+name: racks
+default_range: string
+classes:
+  Rack:
+    attributes:
+      id: {identifier: true}
+      shelves: {range: Shelf, multivalued: true, inlined: true}
+      switches: {range: Switch, multivalued: true, inlined: true}
+  Shelf:
+    attributes:
+      level: {key: true, range: integer}
+      label: {required: true}
+  Switch:
+    attributes:
+      state: {key: true, range: boolean}
+      label: {required: true}
+";
+
+    fn rack_schema() -> SchemaDefinition {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(RACK_SCHEMA).expect("parse rack schema");
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        schema
+    }
+
+    #[derive(serde::Serialize)]
+    struct Labeled {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<&'static str>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct Rack {
+        id: &'static str,
+        shelves: std::collections::BTreeMap<i64, Labeled>,
+        switches: std::collections::BTreeMap<bool, Labeled>,
+    }
+
+    #[test]
+    fn a_number_or_boolean_dict_key_reads_as_its_text() {
+        let rack = Rack {
+            id: "r1",
+            shelves: [
+                (1, Labeled { label: Some("top") }),
+                (2, Labeled { label: None }),
+            ]
+            .into(),
+            switches: [(true, Labeled { label: None })].into(),
+        };
+        let quoted =
+            data("{id: r1, shelves: {'1': {label: top}, '2': {}}, switches: {'true': {}}}");
+        let schema = rack_schema();
+        assert_eq!(
+            validate_record(&schema, "Rack", &rack).expect("Rack is declared"),
+            validate_record(&schema, "Rack", &quoted).expect("Rack is declared")
+        );
+    }
+
+    #[test]
+    fn a_map_with_no_json_form_is_an_error() {
+        #[derive(serde::Serialize)]
+        struct Unkeyed {
+            id: &'static str,
+            shelves: std::collections::BTreeMap<Option<i64>, Labeled>,
+        }
+        let record = Unkeyed {
+            id: "r1",
+            shelves: [(None, Labeled { label: Some("top") })].into(),
+        };
+        match validate_record(&rack_schema(), "Rack", &record) {
+            Err(RecordError::Unserializable(_)) => {}
+            other => panic!("expected Unserializable, got {other:?}"),
+        }
     }
 
     // LinkML reads a slot set to null as absent at every range, and refuses
