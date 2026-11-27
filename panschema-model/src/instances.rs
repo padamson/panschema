@@ -100,7 +100,25 @@ struct ExpandBase<'a> {
     /// the author is sent to the right line.
     supplied_by: Option<&'a str>,
     /// The base value, or why none could be used.
-    resolved: Result<&'a str, &'static str>,
+    resolved: Result<&'a str, NoBase>,
+}
+
+/// Why an `expand_against` slot's bare values have no base.
+#[derive(Clone, Copy)]
+enum NoBase {
+    /// A value was there and cannot be used, for this reason.
+    Unusable(&'static str),
+    /// Neither the record nor any record holding it states the base.
+    Absent,
+}
+
+impl NoBase {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Unusable(reason) => reason,
+            Self::Absent => "no value (nor does any containing record)",
+        }
+    }
 }
 
 /// Classify one authored value as an expansion base: a non-empty
@@ -257,6 +275,9 @@ fn leaves_dataset(
 ) -> bool {
     points_outside_dataset(schema, target) && !anonymous_ids.contains(target)
 }
+
+/// How a record read on its own is named when it has no identifier.
+const LONE_RECORD: &str = "(record)";
 
 /// The place of `slot`'s value: on the record `holder`, or on a vessel
 /// root, which has no id to place it under.
@@ -587,32 +608,7 @@ impl InstanceSet {
             crate::linkml_resolve::resolve_effective_slots_with_provenance(root, schema);
 
         let mut metadata: Vec<(String, String)> = Vec::new();
-        let expansions = crate::diagnostics::expansion_bindings(schema);
-        let expand_base_names: std::collections::BTreeSet<String> = expansions
-            .by_slot
-            .values()
-            .flat_map(|scoped| scoped.schema_wide.iter().chain(scoped.by_class.values()))
-            .cloned()
-            .collect();
-        let mut loader = LinkmlLoader {
-            schema,
-            instances: Vec::new(),
-            seen: std::collections::HashSet::new(),
-            top_level_seen: std::collections::HashSet::new(),
-            duplicate_ids: Vec::new(),
-            undeclared_fields: Vec::new(),
-            expansions,
-            expansion_gaps: Vec::new(),
-            expand_base_names,
-            expand_scope: Vec::new(),
-            effective_slots_by_class: std::collections::BTreeMap::new(),
-            unusable_entries: Vec::new(),
-            undeclared_inlinings: std::collections::BTreeMap::new(),
-            current_holder: None,
-            place: String::new(),
-            anonymous_ids: std::collections::HashSet::new(),
-            family_by_class: std::collections::BTreeMap::new(),
-        };
+        let mut loader = LinkmlLoader::new(schema);
         // The container's authored identifier value, when its declared
         // identifier slot carries one — decided up front because it names
         // the container in findings, routes union-ranged container slots
@@ -877,44 +873,29 @@ impl InstanceSet {
             }
         }
 
-        loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
-        loader.duplicate_ids.sort();
-        loader.undeclared_fields.sort();
-        loader.undeclared_fields.dedup();
-        loader.undeclared_fields.sort();
-        loader.expansion_gaps.sort();
-        loader.expansion_gaps.dedup();
-        let mut external_references: Vec<ExternalReference> = loader
-            .instances
-            .iter()
-            .flat_map(|inst| {
-                inst.references
-                    .iter()
-                    .filter(|r| r.external)
-                    .map(|r| ExternalReference {
-                        referrer: inst.id.clone(),
-                        property: r.property.clone(),
-                        target: r.target.clone(),
-                    })
-            })
-            .collect();
-        external_references.sort();
-        external_references.dedup();
-
         Self {
-            instances: loader.instances,
-            duplicate_ids: loader.duplicate_ids,
-            undeclared_fields: loader.undeclared_fields,
-            expansion_gaps: loader.expansion_gaps,
             metadata,
-            external_references,
             root: Some(root_name.clone()),
             root_record: emitted_root_id,
             root_collision,
-            unusable_collection_entries: loader.unusable_entries,
-            undeclared_inlinings: loader.undeclared_inlinings.into_values().collect(),
-            root_candidates: None,
+            ..loader.into_set()
         }
+    }
+
+    /// Read one record of `class`, and the records inlined in it, with no
+    /// dataset around it: no `tree_root` is chosen and nothing is scoped
+    /// beneath a container. A record with no identifier is named
+    /// `(record)`.
+    pub(crate) fn from_record(
+        schema: &SchemaDefinition,
+        class: &str,
+        record: &serde_norway::Value,
+    ) -> Self {
+        let mut loader = LinkmlLoader::new(schema);
+        loader.place = LONE_RECORD.to_string();
+        loader.holders_outside = true;
+        loader.build_record(class, None, record);
+        loader.into_set()
     }
 
     /// A human-readable account of the references that leave this dataset,
@@ -1133,9 +1114,78 @@ struct LinkmlLoader<'a> {
     /// its `is_a` descendants — built once for the IRI/CURIE spellings;
     /// bare names answer without it.
     family_by_class: std::collections::BTreeMap<String, Vec<String>>,
+    /// Whether the records being read were sent without the records that
+    /// hold them, so what a holder states is unknown here.
+    holders_outside: bool,
 }
 
-impl LinkmlLoader<'_> {
+impl<'a> LinkmlLoader<'a> {
+    fn new(schema: &'a SchemaDefinition) -> Self {
+        let expansions = crate::diagnostics::expansion_bindings(schema);
+        let expand_base_names: std::collections::BTreeSet<String> = expansions
+            .by_slot
+            .values()
+            .flat_map(|scoped| scoped.schema_wide.iter().chain(scoped.by_class.values()))
+            .cloned()
+            .collect();
+        Self {
+            schema,
+            instances: Vec::new(),
+            seen: std::collections::HashSet::new(),
+            top_level_seen: std::collections::HashSet::new(),
+            duplicate_ids: Vec::new(),
+            undeclared_fields: Vec::new(),
+            expansions,
+            expansion_gaps: Vec::new(),
+            expand_base_names,
+            expand_scope: Vec::new(),
+            effective_slots_by_class: std::collections::BTreeMap::new(),
+            unusable_entries: Vec::new(),
+            undeclared_inlinings: std::collections::BTreeMap::new(),
+            current_holder: None,
+            place: String::new(),
+            anonymous_ids: std::collections::HashSet::new(),
+            family_by_class: std::collections::BTreeMap::new(),
+            holders_outside: false,
+        }
+    }
+
+    /// The records read so far as a set, sorted, with no container facts.
+    fn into_set(mut self) -> InstanceSet {
+        self.instances.sort_by(|a, b| a.id.cmp(&b.id));
+        self.duplicate_ids.sort();
+        self.undeclared_fields.sort();
+        self.undeclared_fields.dedup();
+        self.expansion_gaps.sort();
+        self.expansion_gaps.dedup();
+        let mut external_references: Vec<ExternalReference> = self
+            .instances
+            .iter()
+            .flat_map(|inst| {
+                inst.references
+                    .iter()
+                    .filter(|r| r.external)
+                    .map(|r| ExternalReference {
+                        referrer: inst.id.clone(),
+                        property: r.property.clone(),
+                        target: r.target.clone(),
+                    })
+            })
+            .collect();
+        external_references.sort();
+        external_references.dedup();
+        InstanceSet {
+            instances: self.instances,
+            duplicate_ids: self.duplicate_ids,
+            undeclared_fields: self.undeclared_fields,
+            expansion_gaps: self.expansion_gaps,
+            external_references,
+            unusable_collection_entries: self.unusable_entries,
+            undeclared_inlinings: self.undeclared_inlinings.into_values().collect(),
+            ..InstanceSet::default()
+        }
+    }
+
     /// Read entry `index` of the value being read (a list, or a dict in
     /// the order it was written), with `self.place` naming that entry for
     /// as long as `read` runs.
@@ -1236,8 +1286,8 @@ impl LinkmlLoader<'_> {
         // left to consult, so absence is already the whole chain's answer.
         let resolved = match base_from_mapping(container, &base_slot, None, None) {
             OwnBase::Value(base) => Ok(base),
-            OwnBase::Unusable(reason) => Err(reason),
-            OwnBase::Absent => Err("no value (nor does any containing record)"),
+            OwnBase::Unusable(reason) => Err(NoBase::Unusable(reason)),
+            OwnBase::Absent => Err(NoBase::Absent),
         };
         let expand = Some(ExpandBase {
             base_slot: base_slot.as_str(),
@@ -1397,12 +1447,15 @@ impl LinkmlLoader<'_> {
             return None;
         }
         match expand.resolved {
-            Err(reason) => {
+            // A lone record's holders are not in hand, so the base they
+            // may state is unknown rather than missing.
+            Err(NoBase::Absent) if self.holders_outside => None,
+            Err(no_base) => {
                 self.note_supplied_gap(
                     record,
                     slot,
                     expand,
-                    ExpansionGapKind::UnusableBase(reason),
+                    ExpansionGapKind::UnusableBase(no_base.reason()),
                 );
                 None
             }
@@ -2199,7 +2252,7 @@ impl LinkmlLoader<'_> {
                 let (supplied_by, resolved) =
                     match base_from_mapping(map, base_slot, dict_key, id_slot.as_deref()) {
                         OwnBase::Value(base) => (None, Ok(base)),
-                        OwnBase::Unusable(reason) => (None, Err(reason)),
+                        OwnBase::Unusable(reason) => (None, Err(NoBase::Unusable(reason))),
                         // The record supplies nothing itself: the nearest
                         // containing record that carries the base speaks
                         // for it — a benchmark states its target once,
@@ -2210,10 +2263,10 @@ impl LinkmlLoader<'_> {
                                 Some(supplier.insert(who).as_str()),
                                 match candidate {
                                     Ok(value) => Ok(container_base.insert(value).as_str()),
-                                    Err(reason) => Err(reason),
+                                    Err(reason) => Err(NoBase::Unusable(reason)),
                                 },
                             ),
-                            None => (None, Err("no value (nor does any containing record)")),
+                            None => (None, Err(NoBase::Absent)),
                         },
                     };
                 ExpandBase {

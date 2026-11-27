@@ -132,8 +132,10 @@ in the form a user of that language expects.
 The LinkML IR ships on its own as
 [`panschema-model`](https://crates.io/crates/panschema-model): the schema
 model, its `is_a`/mixin/`slot_usage` resolution, the LinkML YAML reader, the
-instance model with anchor expansion, and the IRI every projection mints for
-a class, slot, enum, or record. It carries no RDF, template, CLI, or async
+instance model with anchor expansion, the IRI every projection mints for
+a class, slot, enum, or record, and the checks `panschema verify --data`
+runs, for a dataset or for one record a service received
+(`validate::validate_record`). It carries no RDF, template, CLI, or async
 dependency, so a Rust tool that reasons over schemas and instance data reads
 the model directly instead of parsing a projection back out of Turtle:
 

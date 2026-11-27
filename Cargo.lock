@@ -2681,6 +2681,7 @@ dependencies = [
  "regex",
  "semver",
  "serde",
+ "serde_json",
  "serde_norway",
  "tempfile",
  "thiserror 2.0.21",

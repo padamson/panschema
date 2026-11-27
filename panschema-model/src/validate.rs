@@ -29,7 +29,10 @@ const DATASET: &str = "(root)";
 #[derive(Debug, Clone, PartialEq)]
 pub struct Violation {
     /// The offending record's identifier, or its place in the data when it
-    /// has none (`p1.stamps[1]`), or `(root)` for the dataset itself.
+    /// has none (`p1.stamps[1]`), or `(root)` for the dataset itself. A
+    /// record [`validate_record`] checks that has no identifier is
+    /// `(record)`, and a record it holds is placed beneath that
+    /// (`(record).contents[0]`).
     pub record: String,
     /// Which check failed, carrying what it found.
     pub kind: ViolationKind,
@@ -216,6 +219,27 @@ pub enum ViolationKind {
 }
 
 impl ViolationKind {
+    /// The failed rule's label ([`rule_label`](crate::rules::rule_label)),
+    /// for a rule failure.
+    pub fn rule_label(&self) -> Option<String> {
+        match self {
+            Self::RulePostconditionFailed {
+                rule_index,
+                rule_title,
+                ..
+            }
+            | Self::RuleAlternativesFailed {
+                rule_index,
+                rule_title,
+                ..
+            } => Some(crate::rules::rule_label_of(
+                rule_title.as_deref(),
+                *rule_index,
+            )),
+            _ => None,
+        }
+    }
+
     /// The kind a program matches on, one of [`kind::ALL`]. It names the
     /// check and stays the same when a variant here is renamed.
     pub fn kind(&self) -> &'static str {
@@ -1049,6 +1073,116 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     }
 
     out
+}
+
+/// Why [`validate_record`] could not check a record.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum RecordError {
+    #[error("the schema declares no class `{0}`")]
+    UnknownClass(String),
+    #[error("a `{class}` record must be a mapping")]
+    NotAMapping { class: String },
+    #[error("the record could not be read as data")]
+    Unserializable(#[source] serde_norway::Error),
+}
+
+/// Check one record of `class`, and the records inlined in it, against the
+/// schema as loaded, as [`validate_instances`] checks a record in a dataset.
+///
+/// What lives outside the record is not checked: a reference against the
+/// record it names, and what a record holding this one would state (the
+/// base an `expand_against` slot's bare values join, a `bounds_count_of`
+/// bound). An enum variant reads as its JSON does, a one-key mapping.
+///
+/// ```
+/// use panschema_model::findings::{Finding, kind};
+/// use panschema_model::import_resolve::load_schema;
+/// use panschema_model::validate::validate_record;
+/// use panschema_model::yaml_reader::YamlReader;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let dir = tempfile::tempdir()?;
+/// let path = dir.path().join("shop.yaml");
+/// std::fs::write(
+///     &path,
+///     "
+/// id: https://example.org/shop
+/// name: shop
+/// classes:
+///   Order:
+///     attributes:
+///       id: {identifier: true}
+///       status: {range: string}
+///       shipped_on: {range: date}
+///     rules:
+///       - title: a shipped order has a date
+///         preconditions: {slot_conditions: {status: {equals_string: shipped}}}
+///         postconditions: {slot_conditions: {shipped_on: {required: true}}}
+/// ",
+/// )?;
+/// let schema = load_schema(&path, &YamlReader::new())?.schema;
+///
+/// let body = serde_json::json!({"id": "o1", "status": "shipped"});
+/// let violations = validate_record(&schema, "Order", &body)?;
+///
+/// assert_eq!(violations.len(), 1);
+/// assert_eq!(violations[0].kind(), kind::RULE_POSTCONDITION_FAILED);
+/// assert_eq!(
+///     violations[0].kind.rule_label().as_deref(),
+///     Some("a shipped order has a date")
+/// );
+/// # Ok(())
+/// # }
+/// ```
+pub fn validate_record(
+    schema: &SchemaDefinition,
+    class: &str,
+    record: &impl serde::Serialize,
+) -> Result<Vec<Violation>, RecordError> {
+    if !schema.classes.contains_key(class) {
+        return Err(RecordError::UnknownClass(class.to_string()));
+    }
+    let value = as_data(serde_norway::to_value(record).map_err(RecordError::Unserializable)?);
+    if value.as_mapping().is_none() {
+        return Err(RecordError::NotAMapping {
+            class: class.to_string(),
+        });
+    }
+    let set = InstanceSet::from_record(schema, class, &value);
+    let mut violations = validate_instances(schema, &set);
+    violations.retain(|v| !matches!(v.kind, ViolationKind::DanglingReference(_)));
+    Ok(violations)
+}
+
+/// The struct name and field `serde_json` serializes a number under when
+/// its `arbitrary_precision` feature is on.
+const TEXT_NUMBER: &str = "$serde_json::private::Number";
+
+/// A serialized record in the shape its JSON has: an enum variant
+/// `serde_norway` writes as a YAML tag becomes the one-key mapping JSON
+/// writes, and a number `serde_json` carries as text becomes a number.
+fn as_data(value: Value) -> Value {
+    match value {
+        Value::Tagged(tagged) => {
+            let serde_norway::value::TaggedValue { tag, value } = *tagged;
+            let name = tag.to_string().trim_start_matches('!').to_string();
+            let mut variant = serde_norway::Mapping::new();
+            variant.insert(Value::String(name), as_data(value));
+            Value::Mapping(variant)
+        }
+        Value::Mapping(map) => {
+            if map.len() == 1
+                && let Some(Value::String(text)) = map.get(TEXT_NUMBER)
+                && let Ok(number) = text.parse::<serde_norway::Number>()
+            {
+                return Value::Number(number);
+            }
+            Value::Mapping(map.into_iter().map(|(k, v)| (k, as_data(v))).collect())
+        }
+        Value::Sequence(items) => Value::Sequence(items.into_iter().map(as_data).collect()),
+        other => other,
+    }
 }
 
 /// Read a LinkML instance-data tree into the instance model and validate it —
@@ -3429,6 +3563,10 @@ classes:
         for tier in ["gold", "platinum"] {
             let v = rule_violations(&format!("tickets:\n  - {{id: t1, tier: {tier}}}\n"));
             assert_eq!(v.len(), 1, "`{tier}` fires the rule; got: {v:?}");
+            assert_eq!(
+                v[0].kind.rule_label().as_deref(),
+                Some("an escalated tier names someone")
+            );
             assert!(
                 v[0].detail()
                     .contains("satisfies none of its postcondition alternatives"),
@@ -4167,10 +4305,378 @@ classes:
             &schema,
             &data("id: s1\ncapacity: 1\nbins:\n  - {id: b1, items: [a, b]}\n"),
         );
-        let found: Vec<(&str, &str)> = violations
+        let found = records_and_kinds(&violations);
+        assert_eq!(found, vec![("b1", kind::COUNT_BOUND_EXCEEDED)]);
+    }
+
+    const PARCEL_SCHEMA: &str = "
+name: parcels
+id: https://example.org/parcels
+default_range: string
+enums:
+  Status:
+    permissible_values:
+      open:
+      sealed:
+  Handling:
+    permissible_values:
+      fragile:
+      standard:
+classes:
+  Depot:
+    tree_root: true
+    attributes:
+      parcels: {range: Parcel, multivalued: true, inlined_as_list: true}
+  Parcel:
+    attributes:
+      id: {identifier: true}
+      label: {required: true}
+      status: {range: Status}
+      handling: {range: Handling}
+      weight: {range: integer, minimum_value: 1, maximum_value: 50}
+      code: {pattern: '^P-[0-9]+$'}
+      sender: {range: Parcel}
+      contents: {range: Item, multivalued: true, inlined_as_list: true}
+    rules:
+      - title: a sealed parcel has a code
+        preconditions: {slot_conditions: {status: {equals_string: sealed}}}
+        postconditions: {slot_conditions: {code: {required: true}}}
+      - preconditions: {slot_conditions: {status: {equals_string: open}}}
+        postconditions: {slot_conditions: {weight: {maximum_value: 10}}}
+  Item:
+    attributes:
+      name: {required: true}
+";
+
+    fn parcel_schema() -> SchemaDefinition {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(PARCEL_SCHEMA).expect("parse parcel schema");
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        schema
+    }
+
+    fn parcel_violations(record: &str) -> Vec<Violation> {
+        validate_record(&parcel_schema(), "Parcel", &data(record)).expect("Parcel is declared")
+    }
+
+    fn in_a_dataset(record: &str) -> Vec<Violation> {
+        validate_instance_data(
+            &parcel_schema(),
+            &data(&format!("parcels:\n  - {record}\n")),
+        )
+    }
+
+    fn kinds(violations: &[Violation]) -> Vec<&'static str> {
+        violations.iter().map(Finding::kind).collect()
+    }
+
+    fn records_and_kinds(violations: &[Violation]) -> Vec<(&str, &'static str)> {
+        violations
             .iter()
             .map(|v| (v.record.as_str(), Finding::kind(v)))
-            .collect();
-        assert_eq!(found, vec![("b1", kind::COUNT_BOUND_EXCEEDED)]);
+            .collect()
+    }
+
+    #[test]
+    fn a_record_meeting_its_class_has_no_violations() {
+        let v = parcel_violations(
+            "{id: p1, label: L, status: sealed, code: P-1, weight: 5, contents: [{name: n}]}",
+        );
+        assert_eq!(v, vec![]);
+    }
+
+    #[test]
+    fn a_record_gets_the_violations_verify_reports_for_it_in_a_dataset() {
+        let record = "{id: p1, status: open, handling: rough, weight: 60, code: X, contents: [{}]}";
+        let violations = parcel_violations(record);
+        let found = records_and_kinds(&violations);
+        assert_eq!(
+            found,
+            vec![
+                ("p1", kind::PATTERN_MISMATCH),
+                ("p1", kind::NOT_A_PERMISSIBLE_VALUE),
+                ("p1", kind::REQUIRED_SLOT_ABSENT),
+                ("p1", kind::ABOVE_MAXIMUM),
+                ("p1", kind::RULE_POSTCONDITION_FAILED),
+                ("p1.contents[0]", kind::REQUIRED_SLOT_ABSENT),
+            ],
+            "the record breaks a rule and each kind of slot constraint"
+        );
+        assert_eq!(violations, in_a_dataset(record));
+    }
+
+    #[test]
+    fn a_rule_failure_names_the_rule_by_its_label_and_the_slot() {
+        let rule_failures = |record: &str| -> Vec<(Option<String>, String)> {
+            parcel_violations(record)
+                .iter()
+                .filter_map(|v| match &v.kind {
+                    ViolationKind::RulePostconditionFailed { slot, .. } => {
+                        Some((v.kind.rule_label(), slot.clone()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            rule_failures("{id: p1, label: L, status: sealed}"),
+            vec![(
+                Some("a sealed parcel has a code".to_string()),
+                "code".to_string()
+            )],
+            "a titled rule is named by its title"
+        );
+        assert_eq!(
+            rule_failures("{id: p1, label: L, status: open, weight: 20}"),
+            vec![(Some("#2".to_string()), "weight".to_string())],
+            "an untitled rule is named by its position"
+        );
+    }
+
+    #[test]
+    fn only_a_rule_failure_has_a_rule_label() {
+        let v = parcel_violations("{id: p1}");
+        assert_eq!(kinds(&v), vec![kind::REQUIRED_SLOT_ABSENT]);
+        assert_eq!(v[0].kind.rule_label(), None);
+    }
+
+    #[test]
+    fn a_record_inlined_in_the_one_checked_is_named_by_its_place() {
+        let v = parcel_violations("{id: p1, label: L, contents: [{name: n}, {}]}");
+        let found = records_and_kinds(&v);
+        assert_eq!(found, vec![("p1.contents[1]", kind::REQUIRED_SLOT_ABSENT)]);
+    }
+
+    #[test]
+    fn a_record_with_no_identifier_is_named_as_the_record_and_what_it_inlines_beneath_it() {
+        let v = parcel_violations("{label: L, contents: [{}]}");
+        let found = records_and_kinds(&v);
+        assert_eq!(
+            found,
+            vec![
+                ("(record)", kind::REQUIRED_SLOT_ABSENT),
+                ("(record).contents[0]", kind::REQUIRED_SLOT_ABSENT),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_record_outside_the_one_checked_is_not_a_violation() {
+        let record = "{id: p1, label: L, sender: p9}";
+        assert_eq!(
+            kinds(&in_a_dataset(record)),
+            vec![kind::DANGLING_REFERENCE],
+            "in a dataset, `sender: p9` is a reference to a record that is not there"
+        );
+        assert_eq!(parcel_violations(record), vec![]);
+    }
+
+    #[derive(serde::Serialize)]
+    struct ParcelDto {
+        id: &'static str,
+        status: &'static str,
+        weight: i64,
+        contents: Vec<ItemDto>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ItemDto {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    }
+
+    #[test]
+    fn a_json_value_and_a_struct_holding_the_same_record_get_the_same_violations() {
+        let schema = parcel_schema();
+        let from_json = validate_record(
+            &schema,
+            "Parcel",
+            &serde_json::json!({"id": "p1", "status": "open", "weight": 60, "contents": [{}]}),
+        )
+        .expect("Parcel is declared");
+        let from_struct = validate_record(
+            &schema,
+            "Parcel",
+            &ParcelDto {
+                id: "p1",
+                status: "open",
+                weight: 60,
+                contents: vec![ItemDto { name: None }],
+            },
+        )
+        .expect("Parcel is declared");
+        assert!(
+            !from_json.is_empty(),
+            "the record should break the schema; got: {from_json:?}"
+        );
+        assert_eq!(from_struct, from_json);
+    }
+
+    #[test]
+    fn a_class_the_schema_does_not_declare_is_an_error_naming_it() {
+        match validate_record(&parcel_schema(), "Crate", &data("{}")) {
+            Err(RecordError::UnknownClass(class)) => assert_eq!(class, "Crate"),
+            other => panic!("expected UnknownClass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_mapping_is_an_error() {
+        match validate_record(&parcel_schema(), "Parcel", &data("[p1]")) {
+            Err(RecordError::NotAMapping { class }) => assert_eq!(class, "Parcel"),
+            other => panic!("expected NotAMapping, got {other:?}"),
+        }
+    }
+
+    struct Refuses;
+
+    impl serde::Serialize for Refuses {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("refused"))
+        }
+    }
+
+    #[test]
+    fn a_value_that_cannot_be_serialized_is_an_error() {
+        match validate_record(&parcel_schema(), "Parcel", &Refuses) {
+            Err(RecordError::Unserializable(_)) => {}
+            other => panic!("expected Unserializable, got {other:?}"),
+        }
+    }
+
+    const ANCHORED_SCHEMA: &str = "
+id: https://example.org/bench
+name: bench
+default_range: string
+classes:
+  Bench:
+    tree_root: true
+    slots: [id, target_schema, questions]
+  Question:
+    slots: [id, expected_anchors]
+  DomainRecord:
+    slots: [id]
+slots:
+  id: {identifier: true}
+  target_schema: {range: uri}
+  questions: {range: Question, multivalued: true, inlined_as_list: true}
+  expected_anchors:
+    range: DomainRecord
+    multivalued: true
+    annotations:
+      expand_against: target_schema
+";
+
+    fn anchored_schema() -> SchemaDefinition {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(ANCHORED_SCHEMA).expect("parse anchored schema");
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        schema
+    }
+
+    #[test]
+    fn a_base_left_to_a_holder_outside_the_record_is_not_a_gap() {
+        let in_a_bench_with_no_base = validate_instance_data(
+            &anchored_schema(),
+            &data("id: b1\nquestions:\n  - {id: q1, expected_anchors: [cabernet]}\n"),
+        );
+        assert!(
+            records_and_kinds(&in_a_bench_with_no_base).contains(&("q1", kind::EXPANSION_GAP)),
+            "in a dataset, a bare anchor with no base anywhere is a gap; got: \
+             {in_a_bench_with_no_base:?}"
+        );
+        let v = validate_record(
+            &anchored_schema(),
+            "Question",
+            &data("{id: q1, expected_anchors: [cabernet]}"),
+        )
+        .expect("Question is declared");
+        assert_eq!(v, vec![]);
+    }
+
+    #[test]
+    fn an_expansion_gap_that_is_the_records_own_is_still_reported() {
+        let v = validate_record(
+            &anchored_schema(),
+            "Question",
+            &data("{id: q1, expected_anchors: [{id: d1}]}"),
+        )
+        .expect("Question is declared");
+        assert_eq!(
+            records_and_kinds(&v),
+            vec![
+                ("q1", kind::EXPANSION_GAP),
+                ("q1", kind::UNDECLARED_INLINING)
+            ]
+        );
+    }
+
+    #[derive(serde::Serialize)]
+    enum Measure {
+        Grams(i64),
+    }
+
+    #[derive(serde::Serialize)]
+    struct WeighedParcel {
+        id: &'static str,
+        label: &'static str,
+        weight: Measure,
+        contents: Vec<Measure>,
+    }
+
+    #[test]
+    fn a_struct_and_its_json_get_the_same_violations_when_it_holds_an_enum_variant() {
+        let parcel = WeighedParcel {
+            id: "p1",
+            label: "L",
+            weight: Measure::Grams(5),
+            contents: vec![Measure::Grams(1)],
+        };
+        let as_json = serde_json::to_value(&parcel).expect("serialize to JSON");
+        let schema = parcel_schema();
+        let from_json = validate_record(&schema, "Parcel", &as_json).expect("Parcel is declared");
+        assert!(
+            !from_json.is_empty(),
+            "an object where a number belongs breaks the schema; got: {from_json:?}"
+        );
+        assert_eq!(
+            validate_record(&schema, "Parcel", &parcel).expect("Parcel is declared"),
+            from_json
+        );
+    }
+
+    /// A number as `serde_json` serializes it with its `arbitrary_precision`
+    /// feature, which any crate in a build can turn on.
+    struct TextNumber(&'static str);
+
+    impl serde::Serialize for TextNumber {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeStruct;
+            let mut number = serializer.serialize_struct("$serde_json::private::Number", 1)?;
+            number.serialize_field("$serde_json::private::Number", self.0)?;
+            number.end()
+        }
+    }
+
+    #[derive(serde::Serialize)]
+    struct TextWeighedParcel {
+        id: &'static str,
+        label: &'static str,
+        weight: TextNumber,
+    }
+
+    #[test]
+    fn a_number_serialized_as_text_is_read_as_the_number() {
+        let v = validate_record(
+            &parcel_schema(),
+            "Parcel",
+            &TextWeighedParcel {
+                id: "p1",
+                label: "L",
+                weight: TextNumber("60"),
+            },
+        )
+        .expect("Parcel is declared");
+        assert_eq!(records_and_kinds(&v), vec![("p1", kind::ABOVE_MAXIMUM)]);
     }
 }

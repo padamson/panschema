@@ -56,12 +56,23 @@ rule, and some rules have no `CHECK` form.
   not checked: the record arrived alone, so whether the target exists, and
   whether its class fits a union range, is the caller's question to put
   to its own store. A reference to a record inlined in the same body is
-  checked, as `verify` checks it.
+  checked, as `verify` checks it. For the same reason, what a record
+  holding this one would state is unknown: a bare value at an
+  `expand_against` slot whose base a holder states is read as written,
+  with no finding, and a `bounds_count_of` bound set by a holder is not
+  checked.
+- **Read as its JSON reads.** A struct's enum variant, which
+  `serde_norway` writes as a YAML tag, is read as the one-key mapping JSON
+  writes, and a number `serde_json` carries as text (its
+  `arbitrary_precision` feature) as a number, so a struct and its JSON get
+  the same findings.
 - **A record is not a dataset.** The checks that belong to a container
   (choosing a `tree_root`, the container's id colliding with a record's,
   identifiers unique across the dataset's collections) do not apply.
-- **An unknown class is an error**, not a finding, since it is a mistake
-  in the calling code rather than in the record.
+- **What cannot be checked at all is an error**, not a finding: a class
+  the schema does not declare, a value that is not a mapping, or one
+  `serde_norway` cannot represent. A finding has a kind `verify` reports,
+  and `verify` never reads a lone record.
 
 ---
 
@@ -90,29 +101,39 @@ validate a dataset the way `verify --data` does.
 
 ### Slice 2: One record, by class
 
-**Status:** Planned
+**Status:** Completed
 
 **User Value:** A service checks a request body against its class and
 returns the failed rules by name.
 
 **Acceptance Criteria:**
-- [ ] `validate_record` returns no findings for a record that satisfies
+- [x] `validate_record` returns no findings for a record that satisfies
   its class's rules and slot constraints.
-- [ ] A record that fails a rule's postcondition gets a finding naming
+- [x] A record that fails a rule's postcondition gets a finding naming
   the rule's label and the slot, as `verify --data` reports for the same
   record in a dataset.
-- [ ] A record that breaks a slot constraint (a required slot absent, a
+- [x] A record that breaks a slot constraint (a required slot absent, a
   value outside its enum, a value outside its bounds or pattern) gets the
   finding `verify --data` reports for it.
-- [ ] A record inlined in the one checked is checked too, and its
+- [x] A record inlined in the one checked is checked too, and its
   findings name it by its place.
-- [ ] A reference to a record outside the one checked is not a finding.
-- [ ] A `serde_json::Value` and a struct serialized from the same record
-  get the same findings.
-- [ ] A class the schema does not declare is an error naming the class.
-- [ ] A value that is not a mapping is a finding saying so.
+- [x] A reference to a record outside the one checked is not a finding.
+- [x] A `serde_json::Value` and a struct serialized from the same record
+  get the same findings, including a struct holding an enum variant.
+- [x] A bare `expand_against` value whose base a holder would state is
+  not a finding; an expansion gap that is the record's own still is.
+- [x] A class the schema does not declare is an error naming the class.
+- [x] A value that is not a mapping is an error naming the class.
 
 **Notes:**
+- A rule failure's label comes from `ViolationKind::rule_label`.
+- A record with no identifier is named `(record)` in its findings, and a
+  record inlined in it by its place beneath that (`(record).contents[0]`).
+- Each call works out the schema's facts again (effective slots, and
+  any `expand_against` and `bounds_count_of` bindings), so its cost grows
+  with the schema, not only with the record. A prepared form that works
+  them out once per schema is the follow-up, if a service measures the
+  need.
 - Out of scope: rules that read another record (a reference resolving
   within a scope the caller owns, say). Those need the caller's store.
 - Out of scope: checking a record through the SHACL shapes. `verify` is
@@ -126,4 +147,4 @@ returns the failed rules by name.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Completed |
-| Slice 2 | Must Have | Slice 1 | Planned |
+| Slice 2 | Must Have | Slice 1 | Completed |

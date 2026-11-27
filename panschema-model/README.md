@@ -25,5 +25,22 @@ for (name, slot) in resolve_effective_slots(person, &schema) {
 }
 ```
 
+A service checks a record a client sent against its class's `rules` and
+slot constraints, and gets the findings `panschema verify` reports for it:
+
+```rust
+use std::path::Path;
+
+use panschema_model::import_resolve::load_schema;
+use panschema_model::validate::validate_record;
+use panschema_model::yaml_reader::YamlReader;
+
+let schema = load_schema(Path::new("schema.yaml"), &YamlReader::new())?.schema;
+let body: serde_json::Value = serde_json::from_slice(&request_body)?;
+for violation in validate_record(&schema, "Order", &body)? {
+    println!("{violation}");
+}
+```
+
 `panschema` re-exports every module here at its previous path, so code
 written against `panschema::linkml` keeps working.

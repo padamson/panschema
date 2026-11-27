@@ -3,7 +3,7 @@ name: panschema-usage
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.5.26"
+  version: "0.5.27"
 ---
 
 # panschema
@@ -19,7 +19,9 @@ OpenAPI. Any reader pairs with any writer.
 
 The IR itself is a library, `panschema-model` on crates.io: the schema
 model, its inheritance resolution, the LinkML YAML reader, the instance
-model, and the IRIs every projection mints. A Rust tool that needs to
+model, the IRIs every projection mints, and the checks `verify --data`
+runs, for a dataset or for one record (`validate::validate_record`, which
+takes a request body or a generated struct). A Rust tool that needs to
 reason over a schema or a dataset should depend on that crate rather than
 shelling out to the CLI and parsing an output — and never re-derive the
 model by reading a projection back in.
