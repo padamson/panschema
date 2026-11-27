@@ -1,0 +1,119 @@
+== a scalar
+   validate: No issues found
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== a list of scalars
+   validate: No issues found
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== an inlined record
+   validate: No issues found
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== a list of inlined records
+   validate: No issues found
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== a reference
+   validate: No issues found
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== a list of references
+   validate: No issues found
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== a required scalar
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not of type 'integer' in /parcels/0/weight
+   convert:
+     exit 1: ValueError: weight must be supplied
+== a null in a list of scalars
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not of type 'string' in /parcels/0/tags/1
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:tags "None" , "north" ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== a null in a list of inlined records
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not of type 'object' in /parcels/0/stamps/1
+   convert:
+     exit 1: TypeError: test.Size() argument after ** must be a mapping, not NoneType
+== a null in a list of references
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not of type 'string' in /parcels/0/route/1
+   convert:
+     exit 1: ValueError: None is not a valid URI or CURIE
+== a rule's required slots all present
+   validate: No issues found
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:depot ex:d1 ;
+     	ex:label "L" ;
+     	ex:size _:c14n0 ;
+     	ex:status "sealed" ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+     _:c14n0 a ex:Size ;
+     	ex:width 1 .
+== a rule's required scalar set to null
+   validate: No issues found
+   convert:
+     exit 1: 'message': "'label' is a required property in /parcels/0",
+== a rule's required record set to null
+   validate: No issues found
+   convert:
+     exit 1: 'message': "'size' is a required property in /parcels/0",
+== a rule's required reference set to null
+   validate: No issues found
+   convert:
+     exit 1: 'message': "'depot' is a required property in /parcels/0",
+== a rule's required slots absent
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'label' is a required property in /parcels/0
+[ERROR] [<tmp>/data.yaml/0] 'size' is a required property in /parcels/0
+[ERROR] [<tmp>/data.yaml/0] 'depot' is a required property in /parcels/0
+   convert:
+     exit 1: 'message': "'depot' is a required property in /parcels/0",
+== a null in the container's list of scalars
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not of type 'string' in /notes/1
+   convert:
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:notes "None" , "north" ;
+     	ex:parcels ex:p1 .

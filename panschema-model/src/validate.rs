@@ -3992,9 +3992,10 @@ classes:
             violations.iter().any(|v| matches!(
                 &v.kind,
                 ViolationKind::UndeclaredField(f)
-                    if f.key_kind == Some(crate::instances::KeyKind::Unquotable)
+                    if f.field == "a null"
+                        && f.key_kind == Some(crate::instances::KeyKind::Unquotable)
             )),
-            "an unquotable key is reported as one; got: {:?}",
+            "an unquotable key is reported as one, named by its kind; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
     }
@@ -4326,6 +4327,8 @@ classes:
   Depot:
     tree_root: true
     attributes:
+      id: {identifier: true}
+      notes: {multivalued: true}
       parcels: {range: Parcel, multivalued: true, inlined_as_list: true}
   Parcel:
     attributes:
@@ -4335,7 +4338,10 @@ classes:
       handling: {range: Handling}
       weight: {range: integer, minimum_value: 1, maximum_value: 50}
       code: {pattern: '^P-[0-9]+$'}
+      tags: {multivalued: true}
       sender: {range: Parcel}
+      route: {range: Parcel, multivalued: true}
+      packing: {range: Item}
       contents: {range: Item, multivalued: true, inlined_as_list: true}
     rules:
       - title: a sealed parcel has a code
@@ -4678,5 +4684,108 @@ slots:
         )
         .expect("Parcel is declared");
         assert_eq!(records_and_kinds(&v), vec![("p1", kind::ABOVE_MAXIMUM)]);
+    }
+
+    // LinkML reads a slot set to null as absent at every range, and refuses
+    // a null inside a list at every range (`conformance/probe_null_values.py`).
+    #[test]
+    fn a_slot_set_to_null_is_absent_whatever_its_range() {
+        let record = "{id: p1, label: L, status: null, weight: null, tags: null, \
+                      sender: null, route: null, packing: null, contents: null}";
+        assert_eq!(in_a_dataset(record), vec![], "in a dataset");
+        assert_eq!(parcel_violations(record), vec![], "as one record");
+    }
+
+    #[test]
+    fn a_required_slot_set_to_null_is_absent() {
+        assert_eq!(
+            records_and_kinds(&in_a_dataset("{id: p1, label: null}")),
+            vec![("p1", kind::REQUIRED_SLOT_ABSENT)]
+        );
+    }
+
+    // `linkml-validate` accepts this, reading a key set to null as present;
+    // the runtime `linkml-convert` loads through drops it and refuses it.
+    #[test]
+    fn a_slot_a_rule_requires_set_to_null_is_absent() {
+        assert_eq!(
+            records_and_kinds(&in_a_dataset(
+                "{id: p1, label: L, status: sealed, code: null}"
+            )),
+            vec![("p1", kind::RULE_POSTCONDITION_FAILED)]
+        );
+    }
+
+    fn shapes_outside_range(violations: &[Violation]) -> Vec<(&str, &str, &str)> {
+        violations
+            .iter()
+            .map(|v| match &v.kind {
+                ViolationKind::ValueShapeOutsideRange { slot, shape, .. } => {
+                    (v.record.as_str(), slot.as_str(), shape.as_str())
+                }
+                other => panic!("expected only value-shape findings; got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_null_inside_a_list_is_a_value_outside_its_range() {
+        for (slot, list) in [
+            ("tags", "[north, null]"),
+            ("route", "[p1, null]"),
+            ("contents", "[{name: n}, null]"),
+        ] {
+            let v = in_a_dataset(&format!("{{id: p1, label: L, {slot}: {list}}}"));
+            assert_eq!(
+                shapes_outside_range(&v),
+                vec![("p1", slot, "a null")],
+                "{slot}: {list}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undeclared_field_set_to_null_is_still_undeclared() {
+        assert_eq!(
+            records_and_kinds(&in_a_dataset("{id: p1, label: L, bogus: null}")),
+            vec![("p1", kind::UNDECLARED_FIELD)]
+        );
+    }
+
+    #[test]
+    fn a_value_outside_its_range_at_an_identified_containers_scalar_slot_is_reported() {
+        for (notes, shape) in [
+            ("[north, null]", "a null"),
+            ("[north, {a: 1}]", "an object"),
+            ("{a: 1}", "an object"),
+        ] {
+            let v = validate_instance_data(
+                &parcel_schema(),
+                &data(&format!("id: d1\nnotes: {notes}\n")),
+            );
+            assert_eq!(
+                shapes_outside_range(&v),
+                vec![("d1", "notes", shape)],
+                "notes: {notes}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_object_of_objects_at_a_scalar_slot_is_a_value_outside_its_range() {
+        let object = "{en: {text: hi}, fr: {text: salut}}";
+        assert_eq!(
+            shapes_outside_range(&in_a_dataset(&format!("{{id: p1, label: {object}}}"))),
+            vec![("p1", "label", "an object")],
+            "on a record"
+        );
+        assert_eq!(
+            shapes_outside_range(&validate_instance_data(
+                &parcel_schema(),
+                &data(&format!("id: d1\nnotes: {object}\n")),
+            )),
+            vec![("d1", "notes", "an object")],
+            "on the container"
+        );
     }
 }

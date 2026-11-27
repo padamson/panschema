@@ -148,6 +148,25 @@ and being named in a finding by its place in the data, and behind `verify`
 reporting a key on a dict of such records.
 
 ```bash
+uv run --project conformance conformance/probe_null_values.py
+```
+
+The null-values probe sets one slot of a record to `null` (a scalar, an
+inlined record, a reference, a list of each, and a required scalar), or
+puts a `null` inside a list of scalars, of records, or of references,
+and prints `linkml-validate`'s verdict and the Turtle `linkml-convert`
+writes. A slot set to `null` is valid and writes no triple, whatever its
+range; a required slot set to `null` is refused (`None is not of type
+'integer'`), and so is a `null` inside any list, the container's own
+included. The two tools split on a slot a rule requires set to `null`:
+`linkml-validate` checks the YAML as written, where the key is present,
+and accepts it, while `linkml-convert` loads the record through the
+runtime, which drops the `null`, and refuses it as missing. It is the
+evidence behind `verify` reading a slot set to `null` as absent, a rule's
+required slot included, as the runtime does, and reporting a `null`
+inside a list as a value outside the slot's range.
+
+```bash
 uv run --project conformance conformance/probe_metamodel_extension.py
 ```
 

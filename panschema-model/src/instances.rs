@@ -686,11 +686,10 @@ impl InstanceSet {
             // Class-ranged container slots hold instance records; the
             // container's scalar attributes (a catalog title, a
             // description) describe the dataset itself and surface as its
-            // metadata rather than vanishing. A *list* of scalars (a
-            // multivalued scalar slot on the root) is neither a collection
-            // of records nor a single metadata scalar — it replays through
-            // the record builder like any record's values, and shows in
-            // the metadata as the joined list.
+            // metadata rather than vanishing. Each replays through the
+            // record builder like any record's values, so a value outside
+            // its range is reported; a list shows in the metadata as the
+            // joined list when every element is a scalar.
             let multivalued = crate::linkml_resolve::effective_cardinality(slot).multivalued;
             loader.place = place_in(authored_root_id.as_deref(), slot_name);
             if is_record_collection(multivalued, &class_targets, all_classes) {
@@ -760,29 +759,24 @@ impl InstanceSet {
                     // the records are still data — build them.
                     loader.collect_union_records(slot_name, &class_targets, value);
                 }
-            } else if let Some(scalar) = scalar_value(value) {
-                metadata.push((
-                    slot_name.to_string(),
-                    scalar_to_display(&expand_root(slot_name, scalar)),
-                ));
-                root_fields.insert(key.clone(), value.clone());
-            } else if let Some(items) = value.as_sequence() {
-                let scalars: Vec<ScalarValue> = items
-                    .iter()
-                    .filter_map(scalar_value)
-                    .map(|scalar| expand_root(slot_name, scalar))
-                    .collect();
-                if scalars.len() == items.len() && !scalars.is_empty() {
-                    metadata.push((
-                        slot_name.to_string(),
-                        scalars
-                            .iter()
-                            .map(scalar_to_display)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    ));
-                    root_fields.insert(key.clone(), value.clone());
+            } else {
+                let display = match value {
+                    serde_norway::Value::Sequence(items) => items
+                        .iter()
+                        .map(|item| {
+                            scalar_value(item)
+                                .map(|scalar| scalar_to_display(&expand_root(slot_name, scalar)))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .filter(|shown| !shown.is_empty())
+                        .map(|shown| shown.join(", ")),
+                    other => scalar_value(other)
+                        .map(|scalar| scalar_to_display(&expand_root(slot_name, scalar))),
+                };
+                if let Some(display) = display {
+                    metadata.push((slot_name.to_string(), display));
                 }
+                root_fields.insert(key.clone(), value.clone());
             }
         }
 
@@ -1263,8 +1257,6 @@ impl<'a> LinkmlLoader<'a> {
         keys.iter().filter(|k| slots.contains_key(**k)).count()
     }
 
-    /// Report a field key that is not a string: it can name no slot, so
-    /// its value is dropped — unlike a kept undeclared property.
     /// Root-container parity for a bound class-ranged slot: bare string
     /// entries expand (or gap) exactly as they would on a nested record,
     /// and inline mappings get the same per-record finding, before the
@@ -1476,6 +1468,8 @@ impl<'a> LinkmlLoader<'a> {
         }
     }
 
+    /// Report a field key that is not a string: it can name no slot, so
+    /// its value is dropped — unlike a kept undeclared property.
     fn note_non_string_key(&mut self, record: String, class: &str, key: &serde_norway::Value) {
         let (field, kind) = match key {
             serde_norway::Value::Number(n) => (n.to_string(), KeyKind::Quotable),
@@ -1616,7 +1610,9 @@ impl<'a> LinkmlLoader<'a> {
     }
 
     /// Whether a mapping reads as an identifier-keyed dict of records
-    /// rather than one record: at least two entries (a single unknown
+    /// rather than one record: a class to be a record of (at a scalar
+    /// range a mapping is a value outside it, whatever its entries), at
+    /// least two entries (a single unknown
     /// field is far likelier a typo'd or extension field on a record,
     /// which builds and is reported by name), at least one value itself
     /// a mapping, no sequence values, and no string key naming an
@@ -1628,7 +1624,8 @@ impl<'a> LinkmlLoader<'a> {
         candidates: &[&String],
         map: &serde_norway::Mapping,
     ) -> bool {
-        map.len() >= 2
+        !candidates.is_empty()
+            && map.len() >= 2
             && map
                 .iter()
                 .any(|(_, value)| matches!(value, serde_norway::Value::Mapping(_)))
@@ -2215,6 +2212,11 @@ impl<'a> LinkmlLoader<'a> {
                     key_kind: None,
                 });
             }
+            // LinkML reads a slot set to null as absent, whatever its range
+            // (`conformance/probe_null_values.py`).
+            if field_value.is_null() {
+                continue;
+            }
             // The slot's range targets: the induced set when the schema
             // supplies one (a union contributes every member), else the
             // declared scalar range.
@@ -2414,18 +2416,18 @@ impl<'a> LinkmlLoader<'a> {
             return;
         }
 
-        let (class_targets, all_classes) = class_targets_of(self.schema, ranges);
-
-        // A null carries no value — treat as absent, not a kind mismatch —
-        // except where only a reference could stand: a null can never
-        // reference a record, and dropping it there would silently shorten
-        // an authored reference list.
-        if matches!(value, serde_norway::Value::Null) {
-            if all_classes {
-                push_slot_value(slot_values, slot, InstanceValue::Unexpected("a null"));
-            }
+        // A slot set to null never reaches here, so this null is a list
+        // element, and dropping it would silently shorten the list.
+        if value.is_null() {
+            push_slot_value(
+                slot_values,
+                slot,
+                InstanceValue::Unexpected(yaml_kind(value)),
+            );
             return;
         }
+
+        let (class_targets, all_classes) = class_targets_of(self.schema, ranges);
 
         let reference_to = |target: String,
                             held: bool,
@@ -2619,9 +2621,11 @@ pub fn points_outside_dataset(schema: &SchemaDefinition, target: &str) -> bool {
 /// A human phrase for a YAML value's kind, for a message about a value that
 /// does not fit where it was authored: a number or boolean at a class-ranged slot, an
 /// object at a scalar-ranged one, or a scalar where a collection belongs.
-/// (Null is treated as absent, and a sequence is flattened, before this.)
+/// (A slot set to null is absent and a sequence is flattened before this,
+/// so a null here is a list element or a mapping key.)
 fn yaml_kind(value: &serde_norway::Value) -> &'static str {
     match value {
+        serde_norway::Value::Null => "a null",
         serde_norway::Value::Bool(_) => "a boolean",
         // Deliberately coarser than the scalar-kind vocabulary: this
         // phrases a YAML value that fit no slot at all, where the
@@ -4153,12 +4157,8 @@ classes:
         );
     }
 
-    /// A list holding a non-scalar at a scalar-ranged root slot is not the
-    /// multivalued-scalar shape: no values are invented from the scalar
-    /// subset — the field is left out of the root record entirely rather
-    /// than partially ingested.
     #[test]
-    fn a_mixed_list_at_a_scalar_container_slot_is_not_partially_ingested() {
+    fn a_mixed_list_at_a_scalar_container_slot_keeps_every_element() {
         let mut schema = SchemaDefinition::new("s");
         let mut root = ClassDefinition::new("Root");
         root.tree_root = true;
@@ -4179,10 +4179,18 @@ classes:
             .iter()
             .find(|i| i.id == "r1")
             .expect("the identified root emits as a record");
-        assert!(
-            !root_inst.slot_values.iter().any(|sv| sv.slot == "keywords"),
-            "a mixed list must not be partially ingested; got: {:?}",
-            root_inst.slot_values
+        let keywords: Vec<&InstanceValue> = root_inst
+            .slot_values
+            .iter()
+            .filter(|sv| sv.slot == "keywords")
+            .flat_map(|sv| &sv.values)
+            .collect();
+        assert_eq!(
+            keywords,
+            vec![
+                &InstanceValue::Scalar(ScalarValue::String("alpha".to_string())),
+                &InstanceValue::Unexpected("an object"),
+            ]
         );
     }
 
