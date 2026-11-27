@@ -717,11 +717,12 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                                 });
                             }
                         }
-                        InstanceValue::Scalar(_) => {
+                        // A null, a number, an object: none names a class.
+                        InstanceValue::Scalar(_) | InstanceValue::Unexpected(_) => {
                             let (class, slot) = here();
                             push(ViolationKind::DesignatorNotAString { class, slot });
                         }
-                        _ => {}
+                        InstanceValue::Reference { .. } => {}
                     }
                 }
             }
@@ -773,7 +774,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                         // The unusable-entry finding beside it names the
                         // fix; this value exists so the slot reads as
                         // authored — one problem yields one report.
-                        if *shape == "an identifier-keyed dict" {
+                        if *shape == crate::instances::UNUSABLE_DICT_SHAPE || slot.designates_type {
                             continue;
                         }
                         let declared = if ranges.is_empty() {
@@ -1519,6 +1520,7 @@ pets:
   - {id: d2, kind: ex:Dog}
   - {id: a1, kind: Hamster}
   - {id: a2, kind: 42}
+  - {id: a3, kind: null}
 ",
         )
         .expect("parse data");
@@ -1553,6 +1555,17 @@ pets:
             designator_faults.iter().any(|v| v.record == "a2"
                 && matches!(v.kind, ViolationKind::DesignatorNotAString { .. })),
             "a non-string designator value is reported; got: {designator_faults:?}"
+        );
+        // LinkML refuses a designator set to null, unlike any other slot
+        // set to null (`conformance/probe_null_values.py`).
+        assert_eq!(
+            violations
+                .iter()
+                .filter(|v| v.record == "a3")
+                .map(Finding::kind)
+                .collect::<Vec<_>>(),
+            vec![kind::DESIGNATOR_NOT_A_STRING],
+            "a designator set to null names no class"
         );
     }
 
@@ -3864,6 +3877,46 @@ classes:
 ";
 
     #[test]
+    fn a_null_in_a_list_at_a_vessel_roots_single_valued_class_slot_is_reported() {
+        let schema: SchemaDefinition = serde_norway::from_str(&VESSEL_UNION_SCHEMA.replace(
+            "      things:\n",
+            "      featured:\n        range: Crate\n        inlined: true\n      pick:\n        \
+             inlined: true\n        any_of:\n          - range: Shelf\n          - range: Crate\n      \
+             things:\n",
+        ))
+        .expect("schema");
+        for slot in ["featured", "pick"] {
+            let data: serde_norway::Value =
+                serde_norway::from_str(&format!("{slot}: [{{id: c1, weight: 2}}, null]\n"))
+                    .expect("data");
+            let violations =
+                validate_instances(&schema, &InstanceSet::from_linkml_data(&schema, &data));
+            let reported = violations
+                .iter()
+                .filter(|v| {
+                    matches!(
+                        &v.kind,
+                        ViolationKind::UnusableCollectionEntry(u) if u.slot == slot
+                    )
+                })
+                .count();
+            assert_eq!(
+                reported,
+                1,
+                "the null at `{slot}` is reported once; got: {:?}",
+                violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+            );
+            let absent: serde_norway::Value =
+                serde_norway::from_str(&format!("{slot}: null\n")).expect("data");
+            assert_eq!(
+                validate_instances(&schema, &InstanceSet::from_linkml_data(&schema, &absent)),
+                vec![],
+                "`{slot}` set to null is absent"
+            );
+        }
+    }
+
+    #[test]
     fn a_vessel_rooted_union_collection_builds_and_reports_in_every_spelling() {
         let schema: SchemaDefinition = serde_norway::from_str(VESSEL_UNION_SCHEMA).expect("schema");
         let data: serde_norway::Value =
@@ -4346,6 +4399,8 @@ classes:
       route: {range: Parcel, multivalued: true}
       packing: {range: Item}
       contents: {range: Item, multivalued: true, inlined_as_list: true}
+      bins: {range: Bin, multivalued: true, inlined: true}
+      enclosed: {range: Parcel, multivalued: true, inlined: true}
     rules:
       - title: a sealed parcel has a code
         preconditions: {slot_conditions: {status: {equals_string: sealed}}}
@@ -4355,6 +4410,9 @@ classes:
   Item:
     attributes:
       name: {required: true}
+  Bin:
+    attributes:
+      id: {identifier: true}
 ";
 
     fn parcel_schema() -> SchemaDefinition {
@@ -4873,6 +4931,44 @@ classes:
         assert_eq!(
             records_and_kinds(&in_a_dataset("{id: p1, label: null}")),
             vec![("p1", kind::REQUIRED_SLOT_ABSENT)]
+        );
+    }
+
+    #[test]
+    fn a_dict_entry_with_a_null_body_is_a_record_with_only_its_key() {
+        for (record, found) in [
+            ("{id: p1, label: L, bins: {b9: null}}", vec![]),
+            (
+                "{id: p1, label: L, enclosed: {p9: null}}",
+                vec![("p9", kind::REQUIRED_SLOT_ABSENT)],
+            ),
+        ] {
+            assert_eq!(
+                records_and_kinds(&in_a_dataset(record)),
+                found,
+                "{record} in a dataset"
+            );
+            assert_eq!(
+                records_and_kinds(&parcel_violations(record)),
+                found,
+                "{record} as one record"
+            );
+        }
+        let set = InstanceSet::from_linkml_data(
+            &parcel_schema(),
+            &data("parcels:\n  - {id: p1, label: L, bins: {b9: null}}\n"),
+        );
+        let b9 = set.instances.iter().find(|i| i.id == "b9");
+        assert_eq!(
+            b9.map(|i| i.types.clone()),
+            Some(vec!["Bin".to_string()]),
+            "the entry builds as a Bin named by its key"
+        );
+        // A key that is not a string is no id to carry. JSON has no such
+        // key, so only a dataset can author one.
+        assert_eq!(
+            records_and_kinds(&in_a_dataset("{id: p1, label: L, bins: {42: null}}")),
+            vec![("p1", kind::UNUSABLE_COLLECTION_ENTRY)]
         );
     }
 

@@ -74,6 +74,41 @@
    validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not of type 'string' in /parcels/0/route/1
    convert:
      exit 1: ValueError: None is not a valid URI or CURIE
+== a dict entry with a null body
+   validate: No issues found
+   convert:
+     ex:b9 a ex:Bin .
+     ex:d1 a ex:Depot .
+     ex:p1 a ex:Parcel ;
+     	ex:bins ex:b9 ;
+     	ex:weight 1 .
+     ex:root a ex:Root ;
+     	ex:depots ex:d1 ;
+     	ex:parcels ex:p1 .
+== a dict entry with a null body whose class requires a slot
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] None is not valid under any of the given schemas in /parcels/0/lockers/ex:k9
+   convert:
+     exit 1: ValueError: code must be supplied
+== a type designator naming a subclass
+   validate: No issues found
+   convert:
+     exit 1: 'message': "'Crate' is not one of ['Wrap'] in /parcels/0/wrap/kind",
+== a type designator set to null
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] {'kind': None, 'width': 1} is not valid under any of the given schemas in /parcels/0/wrap
+   convert:
+     exit 1: ValueError: Wrong type designator value: class Wrap has no subclass with ['class_name']='None'
+== a type designator naming a union member
+   validate: No issues found
+   convert:
+     exit 1: 'message': "'Person' is not one of ['Org'] in /parcels/0/holder/kind",
+== a type designator set to null at a union
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] {'kind': None, 'given_name': 'Ada'} is not valid under any of the given schemas in /parcels/0/holder
+   convert:
+     exit 1: 'message': "'Person' is not one of ['Org'] in /parcels/0/holder/kind",
+== a union member's record with no type designator
+   validate: No issues found
+   convert:
+     exit 1: 'message': "'Person' is not one of ['Org'] in /parcels/0/holder/kind",
 == a rule's required slots all present
    validate: No issues found
    convert:
@@ -117,3 +152,7 @@
      	ex:depots ex:d1 ;
      	ex:notes "None" , "north" ;
      	ex:parcels ex:p1 .
+== a null in a list at the container's single-valued reference
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['ex:d1', None] is not of type 'string', 'null' in /featured
+   convert:
+     exit 1: ValueError: ['ex:d1', None] is not a valid URI or CURIE

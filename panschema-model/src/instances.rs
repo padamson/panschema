@@ -248,6 +248,15 @@ enum ClassChoice {
     WrappedDict,
 }
 
+/// The shape left on a record for a dict of records none of whose entries
+/// built: it keeps the slot authored, and `verify` reports only the
+/// unusable entries beside it.
+pub(crate) const UNUSABLE_DICT_SHAPE: &str = "an identifier-keyed dict";
+
+/// Why a null among a class slot's records is refused, phrased to follow
+/// "entry …".
+const NULL_ENTRY_REASON: &str = "is a null; a null names no record";
+
 /// Why a value that reads as an id-keyed dict of records is refused
 /// where one record belongs, phrased to follow "entry …" — one spelling
 /// for every depth and cardinality. [`field_named_key_reason`] is the
@@ -674,6 +683,11 @@ impl InstanceSet {
                 continue;
             };
             let slot = &resolved.definition;
+            // A slot set to null is absent, as on any record; a type
+            // designator replays so `build_record` can report it.
+            if value.is_null() && !slot.designates_type {
+                continue;
+            }
             // A slot with no range (none declared, none defaulted at load)
             // is still a scalar for metadata purposes — skipping it would
             // drop both the root's id and any such scalar from the metadata.
@@ -1829,6 +1843,11 @@ impl<'a> LinkmlLoader<'a> {
                     self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string())
                 }
             },
+            // The container skips a slot set to null, so this one is a
+            // list element.
+            serde_norway::Value::Null => {
+                self.note_unusable(slot, None, NULL_ENTRY_REASON.to_string())
+            }
             _ => {}
         }
     }
@@ -1925,7 +1944,7 @@ impl<'a> LinkmlLoader<'a> {
                 }
             },
             serde_norway::Value::Null => {
-                self.note_unusable(slot, None, "is a null; a null names no record".to_string())
+                self.note_unusable(slot, None, NULL_ENTRY_REASON.to_string())
             }
             other => self.note_unusable(
                 slot,
@@ -1949,8 +1968,17 @@ impl<'a> LinkmlLoader<'a> {
         map: &serde_norway::Mapping,
     ) -> Vec<(String, bool)> {
         let mut ids = Vec::new();
+        let empty = serde_norway::Value::Mapping(serde_norway::Mapping::new());
         for (index, (key, record)) in map.iter().enumerate() {
             let key_str = key.as_str();
+            // LinkML reads an entry with a null body as a record carrying
+            // only its key (`conformance/probe_null_values.py`); a key that
+            // is not a string is no id, so that entry stays unusable.
+            let record = if record.is_null() && key_str.is_some() {
+                &empty
+            } else {
+                record
+            };
             // A key that is a member's own slot name is almost
             // certainly an un-wrapped inline record, not an id —
             // building it would mint a phantom named after a field.
@@ -2002,11 +2030,6 @@ impl<'a> LinkmlLoader<'a> {
                         ),
                     }
                 }
-                serde_norway::Value::Null => self.note_unusable(
-                    slot,
-                    key_str.map(str::to_string),
-                    "is a null; a null names no record".to_string(),
-                ),
                 _ => {
                     let Some(k) = key_str else {
                         self.note_unusable(
@@ -2135,6 +2158,12 @@ impl<'a> LinkmlLoader<'a> {
                     }
                 }
             }
+            // The container skips a slot set to null, so this one is a
+            // list element.
+            serde_norway::Value::Null => {
+                self.note_unusable(slot, None, NULL_ENTRY_REASON.to_string());
+                Vec::new()
+            }
             other => scalar_value(other)
                 .map(|s| vec![(scalar_to_display(&s), false)])
                 .unwrap_or_default(),
@@ -2233,9 +2262,10 @@ impl<'a> LinkmlLoader<'a> {
                     key_kind: None,
                 });
             }
-            // LinkML reads a slot set to null as absent, whatever its range
+            // LinkML reads a slot set to null as absent, whatever its range,
+            // except a type designator, which must name a class
             // (`conformance/probe_null_values.py`).
-            if field_value.is_null() {
+            if field_value.is_null() && !slot.is_some_and(|s| s.designates_type) {
                 continue;
             }
             // The slot's range targets: the induced set when the schema
@@ -2437,8 +2467,9 @@ impl<'a> LinkmlLoader<'a> {
             return;
         }
 
-        // A slot set to null never reaches here, so this null is a list
-        // element, and dropping it would silently shorten the list.
+        // A slot set to null never reaches here unless it is a type
+        // designator, so this null is a list element or a designator's
+        // value, and dropping it would silently shorten the list.
         if value.is_null() {
             push_slot_value(
                 slot_values,
@@ -2509,7 +2540,7 @@ impl<'a> LinkmlLoader<'a> {
                     push_slot_value(
                         slot_values,
                         slot,
-                        InstanceValue::Unexpected(yaml_kind(value)),
+                        InstanceValue::Unexpected(UNUSABLE_DICT_SHAPE),
                     );
                 }
                 for (target, materialized) in entries {
@@ -2556,7 +2587,7 @@ impl<'a> LinkmlLoader<'a> {
                         push_slot_value(
                             slot_values,
                             slot,
-                            InstanceValue::Unexpected("an identifier-keyed dict"),
+                            InstanceValue::Unexpected(UNUSABLE_DICT_SHAPE),
                         );
                     }
                 }
@@ -5376,7 +5407,7 @@ buildings:
         // A dict whose every entry is unusable still marks the slot as
         // authored, so a required-slot check cannot call it absent.
         let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nbuildings:\n  - id: b3\n    rooms:\n      r9: null\n")
+            serde_norway::from_str("id: est\nbuildings:\n  - id: b3\n    rooms:\n      area: 4\n")
                 .expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
         assert!(
@@ -5392,7 +5423,7 @@ buildings:
                 && sv
                     .values
                     .iter()
-                    .any(|v| matches!(v, InstanceValue::Unexpected(_)))),
+                    .any(|v| matches!(v, InstanceValue::Unexpected(UNUSABLE_DICT_SHAPE)))),
             "the authored-but-unusable value is present on the record; got: {:?}",
             b3.slot_values
         );
@@ -5742,15 +5773,24 @@ classes:
             set.unusable_collection_entries
         );
 
-        let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nthings:\n  - {id: x3, kind: 42, held: y}\n")
-                .expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            !set.instances.iter().any(|i| i.id == "x3"),
-            "a non-string designator is explicit-but-unusable, never a guess; got: {:?}",
-            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
-        );
+        // LinkML refuses a designator set to null at a union too
+        // (`conformance/probe_null_values.py`).
+        for value in ["42", "null"] {
+            let data: serde_norway::Value = serde_norway::from_str(&format!(
+                "id: est\nthings:\n  - {{id: x3, kind: {value}, held: y}}\n"
+            ))
+            .expect("data");
+            let set = InstanceSet::from_linkml_data(&schema, &data);
+            assert!(
+                !set.instances.iter().any(|i| i.id == "x3"),
+                "a designator set to {value} is explicit-but-unusable, never a guess; got: {:?}",
+                set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+            );
+            assert!(
+                !set.unusable_collection_entries.is_empty(),
+                "a designator set to {value} is reported, not dropped"
+            );
+        }
 
         let data: serde_norway::Value =
             serde_norway::from_str("id: est\nthings:\n  - {id: c2, kind: est:Crate}\n")
