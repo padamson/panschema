@@ -253,9 +253,18 @@ enum ClassChoice {
 /// only the unusable entries beside it.
 pub(crate) const UNUSABLE_ENTRIES_SHAPE: &str = "a collection of unusable entries";
 
+/// The shape left in a multivalued slot given one value, not a list:
+/// LinkML refuses it (`conformance/probe_value_arity.py`), so the value
+/// does not load, and `verify` reports it as no list.
+pub(crate) const NOT_A_LIST_SHAPE: &str = "one value where a list belongs";
+
 /// Why a null among a class slot's records is refused, phrased to follow
 /// "entry …".
 const NULL_ENTRY_REASON: &str = "is a null; a null names no record";
+
+/// Why a list inside a collection's list is refused.
+const NESTED_LIST_REASON: &str = "is a list inside the collection's list; write its entries in \
+                                  one list";
 
 /// Why a value that reads as an id-keyed dict of records is refused
 /// where one record belongs, phrased to follow "entry …" — one spelling
@@ -762,11 +771,15 @@ impl InstanceSet {
             let collection = is_record_collection(multivalued, &class_targets, all_classes);
             let union = !collection && class_targets.len() > 1;
             let mixed = !class_targets.is_empty() && !all_classes;
-            if mixed || (union && authored_identifier) {
+            // A collection reports its own entries.
+            let refused_shape =
+                !collection && misshapen(value, multivalued, || collection).is_some();
+            if mixed || refused_shape || (union && authored_identifier) {
                 // Read with the container's own fields, the authored keys
                 // choosing each value's member per record-level rules: on a
-                // container that is a record, and wherever a range mixing
-                // classes with types could hold a literal.
+                // container that is a record, wherever a range mixing
+                // classes with types could hold a literal, and for a value
+                // whose list shape the slot refuses.
                 root_fields.insert(key.clone(), value.clone());
             } else if !class_targets.is_empty() {
                 let expanded_storage;
@@ -1858,7 +1871,8 @@ impl<'a> LinkmlLoader<'a> {
 
     /// Read the single-valued union of classes on a container that is no
     /// record: a mapping naming one member is built, a string cites a
-    /// record by its id, and anything else is reported. Returns each id
+    /// record by its id, and any other scalar is reported (a list or a
+    /// null is read with the container's own fields). Returns each id
     /// with whether the edge is containment.
     fn collect_union_records(
         &mut self,
@@ -1868,15 +1882,6 @@ impl<'a> LinkmlLoader<'a> {
         value: &serde_norway::Value,
     ) -> Vec<(String, bool)> {
         match value {
-            serde_norway::Value::Sequence(items) => {
-                let mut ids = Vec::new();
-                for (index, item) in items.iter().enumerate() {
-                    ids.extend(self.at_entry(index, |loader| {
-                        loader.collect_union_records(slot, slot_def, candidates, item)
-                    }));
-                }
-                ids
-            }
             serde_norway::Value::Mapping(map) => {
                 let reason = match self.disambiguate_class(candidates, map) {
                     ClassChoice::One(class) => {
@@ -1897,12 +1902,6 @@ impl<'a> LinkmlLoader<'a> {
             }
             // A string is a reference to a member's record by its id.
             serde_norway::Value::String(id) => vec![(id.clone(), false)],
-            // The container skips a slot set to null, so this one is a
-            // list element.
-            serde_norway::Value::Null => {
-                self.note_unusable(slot, None, NULL_ENTRY_REASON.to_string());
-                Vec::new()
-            }
             // LinkML refuses any other scalar at a union of classes
             // (`conformance/probe_vessel_fields.py`).
             other => {
@@ -1987,10 +1986,10 @@ impl<'a> LinkmlLoader<'a> {
             // reference to a record by its identifier. Whether
             // it resolves is the integrity pass's question.
             serde_norway::Value::String(text) => ids.push((text.clone(), true)),
-            // An authored arity mistake stays loadable rather
-            // than vanishing behind its extra brackets.
+            // LinkML refuses a list inside the collection's list
+            // (`conformance/probe_value_arity.py`).
             serde_norway::Value::Sequence(_) => {
-                ids.extend(self.collect_collection(slot, slot_def, holder, candidates, item));
+                self.note_unusable(slot, None, NESTED_LIST_REASON.to_string())
             }
             serde_norway::Value::Mapping(map) => match self.disambiguate_class(candidates, map) {
                 ClassChoice::One(class) => {
@@ -2174,9 +2173,8 @@ impl<'a> LinkmlLoader<'a> {
 
     /// One record at a single-valued class-ranged container slot: an inline
     /// mapping materializes that record (containment), a bare scalar cites
-    /// an existing record by id. A sequence recurses per element, so an
-    /// authored arity mistake stays visible to validation instead of
-    /// vanishing.
+    /// an existing record by id. The container reads a list here, or a
+    /// null, with its own fields, so neither reaches this.
     fn collect_single(
         &mut self,
         slot: &str,
@@ -2186,15 +2184,6 @@ impl<'a> LinkmlLoader<'a> {
         value: &serde_norway::Value,
     ) -> Vec<(String, bool)> {
         match value {
-            serde_norway::Value::Sequence(items) => {
-                let mut ids = Vec::new();
-                for (index, item) in items.iter().enumerate() {
-                    ids.extend(self.at_entry(index, |loader| {
-                        loader.collect_single(slot, slot_def, holder, class_name, item)
-                    }));
-                }
-                ids
-            }
             serde_norway::Value::Mapping(map) => {
                 // The class is fixed, but the shape still chooses: a
                 // mapping reading as an id-keyed dict is refused here
@@ -2221,12 +2210,6 @@ impl<'a> LinkmlLoader<'a> {
                         Vec::new()
                     }
                 }
-            }
-            // The container skips a slot set to null, so this one is a
-            // list element.
-            serde_norway::Value::Null => {
-                self.note_unusable(slot, None, NULL_ENTRY_REASON.to_string());
-                Vec::new()
             }
             other => scalar_value(other)
                 .map(|s| vec![(scalar_to_display(&s), false)])
@@ -2530,6 +2513,17 @@ impl<'a> LinkmlLoader<'a> {
         references: &mut Vec<Reference>,
         slot_values: &mut Vec<SlotValue>,
     ) {
+        // None of these loads; an undeclared field has no slot to hold
+        // it to.
+        if slot_def.is_some()
+            && let Some(shape) = misshapen(value, multivalued, || {
+                let (class_targets, all_classes) = class_targets_of(self.schema, ranges);
+                is_record_collection(multivalued, &class_targets, all_classes)
+            })
+        {
+            push_slot_value(slot_values, slot, InstanceValue::Unexpected(shape));
+            return;
+        }
         if let serde_norway::Value::Sequence(items) = value {
             // Each list element is one value of the slot; a mapping among
             // them is a single record, never another dict collection —
@@ -2755,6 +2749,29 @@ pub fn points_outside_dataset(schema: &SchemaDefinition, target: &str) -> bool {
     match target.split_once(':') {
         Some((prefix, _)) => schema.prefixes.contains_key(prefix),
         None => false,
+    }
+}
+
+/// The shape of `value` when its list shape is one LinkML refuses at a
+/// slot that is or is not `multivalued`, whatever a list's length
+/// (`conformance/probe_value_arity.py`): a list where one value belongs
+/// (a list inside a list among them), or one value where a list belongs.
+/// A mapping at a slot that `holds_records` (asked only of a mapping at
+/// a multivalued slot) is the dict spelling of a collection. A null
+/// reaches a reader only as a type designator's value, which its own
+/// check reports, and a tagged value is left to the readers.
+fn misshapen(
+    value: &serde_norway::Value,
+    multivalued: bool,
+    holds_records: impl FnOnce() -> bool,
+) -> Option<&'static str> {
+    match value {
+        serde_norway::Value::Sequence(_) => (!multivalued).then_some("a list"),
+        serde_norway::Value::Mapping(_) => {
+            (multivalued && !holds_records()).then_some(NOT_A_LIST_SHAPE)
+        }
+        serde_norway::Value::Null | serde_norway::Value::Tagged(_) => None,
+        _ => multivalued.then_some(NOT_A_LIST_SHAPE),
     }
 }
 
@@ -5242,7 +5259,7 @@ stamps:
         let set = union_set(
             "\
 searches:
-  - {id: ls1, hasInput: q1}
+  - {id: ls1, hasInput: [q1]}
 extractions:
   - {id: ex1, hasInput: [d1]}
 questions:
@@ -5289,6 +5306,35 @@ docs:
                 ("description".to_string(), "A curated cellar".to_string()),
             ],
             "container scalars, in the data file's order"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_field_keeps_its_list() {
+        let (_, set) = depot_set("parcels:\n  - {id: p1, bogus: [a, b]}\n");
+        assert_eq!(
+            find(&set, "p1").values_at("bogus").collect::<Vec<_>>(),
+            vec![
+                &InstanceValue::Scalar(ScalarValue::String("a".into())),
+                &InstanceValue::Scalar(ScalarValue::String("b".into()))
+            ],
+            "no slot holds an undeclared field to one value or a list"
+        );
+    }
+
+    #[test]
+    fn a_container_value_of_the_wrong_list_shape_is_no_metadata() {
+        let schema: SchemaDefinition = serde_norway::from_str(&VESSEL_DEPOT.replace(
+            "      title: {}",
+            "      title: {}\n      notes: {multivalued: true}\n      subtitle: {}",
+        ))
+        .expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("title: [T]\nnotes: north\nsubtitle: S\n").expect("data");
+        assert_eq!(
+            InstanceSet::from_linkml_data(&schema, &data).metadata,
+            vec![("subtitle".to_string(), "S".to_string())],
+            "a list where one value belongs and one value where a list belongs are shown nowhere"
         );
     }
 
@@ -5766,15 +5812,27 @@ buildings:
             b4.slot_values
         );
 
-        // One more stray bracket changes nothing: the wrapped dict is
-        // refused however deep the arity mistake nests, and a dict at a
-        // single-valued class slot is the same mistake without a list.
-        for yaml in [
-            "id: est\nbuildings:\n  - id: b5\n    rooms:\n      - - r6: {area: 9}\n          r7: {area: 12}\n",
-            "id: est\nbuildings:\n  - id: b5\n    prime:\n      p1: {area: 1}\n      p2: {area: 2}\n",
-        ] {
-            let data: serde_norway::Value = serde_norway::from_str(yaml).expect("data");
-            let set = InstanceSet::from_linkml_data(&schema, &data);
+        // One more stray bracket is a list where a record belongs, the
+        // shape LinkML refuses, and a dict at a single-valued class slot
+        // is the wrapped-dict mistake without a list.
+        let read = |yaml: &str| {
+            InstanceSet::from_linkml_data(&schema, &serde_norway::from_str(yaml).expect("data"))
+        };
+        let nested = read(
+            "id: est\nbuildings:\n  - id: b5\n    rooms:\n      - - r6: {area: 9}\n          \
+             r7: {area: 12}\n",
+        );
+        let b5 = nested.instances.iter().find(|i| i.id == "b5").expect("b5");
+        assert_eq!(
+            b5.values_at("rooms").collect::<Vec<_>>(),
+            vec![&InstanceValue::Unexpected("a list")],
+            "a list inside the list loads nothing and keeps its shape on the record"
+        );
+        let single = read(
+            "id: est\nbuildings:\n  - id: b5\n    prime:\n      p1: {area: 1}\n      p2: {area: \
+             2}\n",
+        );
+        for set in [&nested, &single] {
             assert!(
                 set.instances
                     .iter()
@@ -5782,14 +5840,15 @@ buildings:
                 "no phantom or guessed record builds; got: {:?}",
                 set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
             );
-            assert!(
-                set.unusable_collection_entries
-                    .iter()
-                    .any(|u| u.record.as_deref() == Some("b5")),
-                "the mistake is reported against its holder; got: {:?}",
-                set.unusable_collection_entries
-            );
         }
+        assert!(
+            single
+                .unusable_collection_entries
+                .iter()
+                .any(|u| u.record.as_deref() == Some("b5")),
+            "the mistake is reported against its holder; got: {:?}",
+            single.unusable_collection_entries
+        );
     }
 
     #[test]
@@ -6643,23 +6702,22 @@ classes:
             "the miss is reported even with no container record to carry it"
         );
 
-        // A list under the same slot walks entry by entry: hits build,
-        // the miss is still reported.
+        // A list under the same single-valued slot is the wrong shape
+        // (`conformance/probe_value_arity.py`): none of its entries builds.
         let data: serde_norway::Value = serde_norway::from_str(
             "thing:\n  - {id: v1, kind: Crate, weight: 2}\n  - {id: x7, kind: Basket}\n",
         )
         .expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
-        let v1 = set
-            .instances
-            .iter()
-            .find(|i| i.id == "v1")
-            .unwrap_or_else(|| panic!("list entries materialize; got: {set:?}"));
-        assert_eq!(v1.types, vec!["Crate"]);
-        assert!(
-            !set.instances.iter().any(|i| i.id == "x7")
-                && !set.unusable_collection_entries.is_empty(),
-            "the miss inside the list is refused and reported; got: {set:?}"
+        assert_eq!(
+            (
+                set.instances.len(),
+                set.vessel
+                    .as_ref()
+                    .map(|v| v.values_at("thing").cloned().collect::<Vec<_>>())
+            ),
+            (0, Some(vec![InstanceValue::Unexpected("a list")])),
+            "a list where one record belongs builds nothing and keeps its shape; got: {set:?}"
         );
     }
 
@@ -7114,10 +7172,16 @@ classes:
         let data: serde_norway::Value =
             serde_norway::from_str("id: est\nthings:\n  - [{id: s1, held: x}]\n").expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            set.instances.iter().any(|i| i.id == "s1"),
-            "an authored arity mistake stays loadable; got: {:?}",
-            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        assert_eq!(
+            (
+                set.instances.iter().any(|i| i.id == "s1"),
+                set.unusable_collection_entries
+                    .iter()
+                    .map(|u| (u.slot.as_str(), u.reason.as_str()))
+                    .collect::<Vec<_>>()
+            ),
+            (false, vec![("things", NESTED_LIST_REASON)]),
+            "a list inside the collection's list builds nothing and is reported"
         );
     }
 
@@ -7301,7 +7365,7 @@ parcels:
     }
 
     #[test]
-    fn every_list_an_anonymous_record_sits_in_is_part_of_its_place() {
+    fn no_record_builds_from_a_list_its_slot_cannot_take() {
         let (_, set) = depot_set(
             "\
 size: [{width: 3}]
@@ -7311,8 +7375,27 @@ stamps: [[{name: nested}]]
         );
         assert_eq!(
             handles(&set, true),
-            vec!["either[0]", "size[0]", "stamps[0][0]"],
-            "a single-valued slot authored as a list, a union slot, and a list in a list"
+            Vec::<&str>::new(),
+            "no record builds from any of them"
+        );
+        let vessel = set
+            .vessel
+            .as_ref()
+            .expect("the container's fields are read");
+        for slot in ["size", "either"] {
+            assert_eq!(
+                vessel.values_at(slot).collect::<Vec<_>>(),
+                vec![&InstanceValue::Unexpected("a list")],
+                "a list at the single-valued `{slot}` keeps only its shape"
+            );
+        }
+        assert_eq!(
+            set.unusable_collection_entries
+                .iter()
+                .map(|u| (u.slot.as_str(), u.reason.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("stamps", NESTED_LIST_REASON)],
+            "a list inside the collection's list is an unusable entry"
         );
     }
 

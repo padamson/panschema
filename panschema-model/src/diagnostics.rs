@@ -2078,6 +2078,7 @@ fn single_string_at<'a>(
         [InstanceValue::Scalar(ScalarValue::Boolean(_))] => Err(format!(
             "`{slot}` is a boolean, not a string — quote it in the data"
         )),
+        [InstanceValue::Unexpected(shape)] => Err(format!("`{slot}` is {shape}, not a string")),
         [_] => Err(format!("`{slot}` is not a string")),
         _ => Err(format!("`{slot}` has several values where one is expected")),
     }
@@ -3160,6 +3161,11 @@ pub fn value_claims(
         let record = match single(entry, record_slot)? {
             InstanceValue::Reference { target, .. } => target.as_str(),
             InstanceValue::Scalar(ScalarValue::String(s)) => s.as_str(),
+            InstanceValue::Unexpected(shape) => {
+                return Err(format!(
+                    "`{record_slot}` is {shape}, not a reference or IRI"
+                ));
+            }
             _ => return Err(format!("`{record_slot}` is not a reference or IRI")),
         };
         let record = crate::linkml_resolve::resolve_reference_iri(schema, record);
@@ -7677,19 +7683,19 @@ classes:
             ),
             (
                 "{record: [wine:bordeaux, wine:plain], slot: color, value: red}",
-                "several `record` values",
+                "`record` is a list, not a reference or IRI",
             ),
             (
                 "{record: wine:bordeaux, slot: color, value: [red, white]}",
-                "`value` has several values",
+                "`value` is a list, not a string",
             ),
             (
                 "{record: wine:bordeaux, slot: {a: 1}, value: red}",
-                "`slot` is not a string",
+                "`slot` is an object, not a string",
             ),
             (
                 "{record: true, slot: color, value: red}",
-                "`record` is not a reference or IRI",
+                "`record` is a boolean, not a reference or IRI",
             ),
             (
                 "{record: wine:bordeaux, slot: blend, value: merlot}",
@@ -9001,8 +9007,47 @@ classes:
         );
     }
 
-    /// A multivalued `via`, a `via` naming no sibling class, and a
-    /// malformed `via` value are each uncheckable — said so, never holding.
+    #[test]
+    fn a_single_string_is_read_only_from_a_slot_holding_one_string() {
+        use crate::instances::{Instance, InstanceValue, ScalarValue, SlotValue};
+        let text = |v: &str| InstanceValue::Scalar(ScalarValue::String(v.into()));
+        let holding = |values: Vec<InstanceValue>| Instance {
+            id: "r".into(),
+            iri: None,
+            uri_unresolved: false,
+            label: "r".into(),
+            description: None,
+            types: vec!["Bench".into()],
+            literals: vec![],
+            references: vec![],
+            slot_values: vec![SlotValue {
+                slot: "pinned".into(),
+                values,
+            }],
+            scope: None,
+            anonymous: false,
+        };
+        assert_eq!(
+            single_string_at(&holding(vec![text("a")]), "pinned"),
+            Ok(Some("a"))
+        );
+        assert_eq!(
+            single_string_at(
+                &holding(vec![InstanceValue::Unexpected("a list")]),
+                "pinned"
+            ),
+            Err("`pinned` is a list, not a string".to_string())
+        );
+        assert_eq!(
+            single_string_at(&holding(vec![text("a"), text("b")]), "pinned"),
+            Err("`pinned` has several values where one is expected".to_string()),
+            "a multivalued slot can still hold several"
+        );
+    }
+
+    /// A `via` holding several values, a list where its one value
+    /// belongs, a `via` naming no sibling class, and a malformed `via`
+    /// value are each uncheckable — said so, never holding.
     #[test]
     fn uncheckable_via_claims_are_reported_never_holding() {
         let sibling_schema = linked_sibling_schema();
@@ -9025,11 +9070,36 @@ classes:
             vec![],
             "no first-value narrowing may be evaluated"
         );
-        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert_eq!(
+            found
+                .uncheckable
+                .iter()
+                .map(|u| u.reason.as_str())
+                .collect::<Vec<_>>(),
+            vec!["its `via` value is a list, not a class reference"],
+            "a list where `via`'s one value belongs"
+        );
+
+        let mut several = claiming_schema();
+        several
+            .classes
+            .get_mut("Bench")
+            .and_then(|bench| bench.attributes.get_mut("via"))
+            .expect("via")
+            .multivalued = true;
+        let found = unverified_absences(
+            &several,
+            &scoped_set(
+                &several,
+                "id: b1\nanchors:\n  - cellar:f1\nvia: ['cellar:Link', 'cellar:Item']\n",
+            ),
+            &AbsenceBindings::schema_wide("anchors", Some("via")),
+            &[sibling_graph(&sibling_schema, &sibling)],
+        );
         assert!(
-            found.uncheckable[0].message().contains("one `via` value"),
-            "got: {}",
-            found.uncheckable[0].message()
+            found.uncheckable.len() == 1
+                && found.uncheckable[0].message().contains("one `via` value"),
+            "a multivalued `via` holding two narrows by neither; got: {found:?}"
         );
 
         let set = scoped_set(

@@ -63,8 +63,6 @@ pub mod kind {
     kinds! {
         /// A required slot has no value on the record.
         REQUIRED_SLOT_ABSENT = "conformance/required-slot-absent";
-        /// A single-valued slot holds more than one value.
-        SINGLE_VALUED_SLOT_REPEATED = "conformance/single-valued-slot-repeated";
         /// A multivalued slot holds fewer values than its declared minimum.
         FEWER_VALUES_THAN_MINIMUM = "conformance/fewer-values-than-minimum";
         /// A multivalued slot holds more values than its declared maximum.
@@ -79,6 +77,8 @@ pub mod kind {
         OBJECT_NAMES_NO_CLASS_RANGE = "conformance/object-names-no-class-range";
         /// A value whose shape the slot's range cannot take.
         VALUE_SHAPE_OUTSIDE_RANGE = "conformance/value-shape-outside-range";
+        /// One value where the slot holds a list.
+        VALUE_NOT_A_LIST = "conformance/value-not-a-list";
         /// A reference whose target's class is no member of the union range.
         REFERENCE_OUTSIDE_UNION = "conformance/reference-outside-union";
         /// A scalar of a kind the range's primitives do not include.

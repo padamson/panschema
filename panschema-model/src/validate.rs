@@ -69,12 +69,6 @@ impl Finding for Violation {
 pub enum ViolationKind {
     /// A required slot has no value on the record.
     RequiredSlotAbsent { class: String, slot: String },
-    /// A single-valued slot holds more than one value.
-    SingleValuedSlotRepeated {
-        class: String,
-        slot: String,
-        count: usize,
-    },
     /// A multivalued slot holds fewer values than its declared minimum.
     FewerValuesThanMinimum {
         class: String,
@@ -118,6 +112,8 @@ pub enum ViolationKind {
         shape: String,
         ranges: Vec<String>,
     },
+    /// One value where a multivalued slot holds a list.
+    ValueNotAList { class: String, slot: String },
     /// A reference into a union range whose target's class satisfies no
     /// member of the union.
     ReferenceOutsideUnion {
@@ -242,7 +238,6 @@ impl ViolationKind {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::RequiredSlotAbsent { .. } => kind::REQUIRED_SLOT_ABSENT,
-            Self::SingleValuedSlotRepeated { .. } => kind::SINGLE_VALUED_SLOT_REPEATED,
             Self::FewerValuesThanMinimum { .. } => kind::FEWER_VALUES_THAN_MINIMUM,
             Self::MoreValuesThanMaximum { .. } => kind::MORE_VALUES_THAN_MAXIMUM,
             Self::DesignatorNamesAnotherClass { .. } => kind::DESIGNATOR_NAMES_ANOTHER_CLASS,
@@ -250,6 +245,7 @@ impl ViolationKind {
             Self::InvalidPattern { .. } => kind::INVALID_PATTERN,
             Self::ObjectNamesNoClassRange { .. } => kind::OBJECT_NAMES_NO_CLASS_RANGE,
             Self::ValueShapeOutsideRange { .. } => kind::VALUE_SHAPE_OUTSIDE_RANGE,
+            Self::ValueNotAList { .. } => kind::VALUE_NOT_A_LIST,
             Self::ReferenceOutsideUnion { .. } => kind::REFERENCE_OUTSIDE_UNION,
             Self::ScalarKindOutsideRange { .. } => kind::SCALAR_KIND_OUTSIDE_RANGE,
             Self::NotAPermissibleValue { .. } => kind::NOT_A_PERMISSIBLE_VALUE,
@@ -278,9 +274,6 @@ impl ViolationKind {
         match self {
             Self::RequiredSlotAbsent { class, slot } => {
                 format!("required slot `{slot}` (class `{class}`) is absent")
-            }
-            Self::SingleValuedSlotRepeated { class, slot, count } => {
-                format!("single-valued slot `{slot}` (class `{class}`) has {count} values")
             }
             Self::FewerValuesThanMinimum {
                 class,
@@ -317,6 +310,10 @@ impl ViolationKind {
                 "slot `{slot}` (class `{class}`) has an object whose fields name no one of its \
                  class ranges `{}`; give it a field that only the intended one declares",
                 ranges.join(" or ")
+            ),
+            Self::ValueNotAList { class, slot } => format!(
+                "multivalued slot `{slot}` (class `{class}`) holds one value, not a list; write \
+                 it as a list, even of one entry"
             ),
             Self::ValueShapeOutsideRange {
                 class,
@@ -663,9 +660,17 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 // No values to size-check.
                 continue;
             }
-            if !card.multivalued && count > 1 {
+            // One value where a list belongs is that finding alone, never
+            // also a count outside the slot's bounds; the reader leaves its
+            // marker as the slot's only value.
+            if matches!(
+                authored.map(|sv| sv.values.as_slice()),
+                Some([InstanceValue::Unexpected(shape)])
+                    if *shape == crate::instances::NOT_A_LIST_SHAPE
+            ) {
                 let (class, slot) = here();
-                push(ViolationKind::SingleValuedSlotRepeated { class, slot, count });
+                push(ViolationKind::ValueNotAList { class, slot });
+                continue;
             }
             if let Some(minimum) = card.min
                 && (count as u32) < minimum
@@ -2423,9 +2428,9 @@ classes:
     fn single_valued_slot_given_a_list_is_a_violation() {
         let d = data("items:\n  - id: a\n    color: [red, blue]\n    tags: [x, y]\n");
         let v = validate_instance_data(&card_schema(), &d);
-        assert_eq!(v.len(), 1, "color is single-valued");
+        assert_eq!(v.len(), 1, "color is single-valued; got: {v:?}");
         assert!(
-            matches!(&v[0].kind, ViolationKind::SingleValuedSlotRepeated { slot, count, .. } if slot == "color" && *count == 2),
+            matches!(&v[0].kind, ViolationKind::ValueShapeOutsideRange { slot, shape, .. } if slot == "color" && shape == "a list"),
             "got: {}",
             v[0].detail()
         );
@@ -2440,6 +2445,14 @@ classes:
             matches!(&v[0].kind, ViolationKind::FewerValuesThanMinimum { slot, count, minimum, .. } if slot == "tags" && *count == 1 && *minimum == 2),
             "got: {}",
             v[0].detail()
+        );
+        assert_eq!(
+            validate_instance_data(&card_schema(), &data("items:\n  - id: a\n    tags: x\n"))
+                .iter()
+                .map(Finding::kind)
+                .collect::<Vec<_>>(),
+            vec![kind::VALUE_NOT_A_LIST],
+            "one value where a list belongs is that finding alone, not also below the minimum"
         );
     }
 
@@ -3895,6 +3908,8 @@ classes:
       either: {any_of: [{range: Shelf}, {range: Crate}, {range: integer}]}
       one: {any_of: [{range: Shelf}, {range: integer}]}
       many: {multivalued: true, any_of: [{range: Shelf}, {range: integer}]}
+      featured: {range: Shelf}
+      mixed_many: {multivalued: true, any_of: [{range: Shelf}, {range: Crate}, {range: integer}]}
   Shelf:
     attributes:
       id: {identifier: true}
@@ -3905,7 +3920,23 @@ classes:
 ";
         let schema: SchemaDefinition = serde_norway::from_str(DEPOT).expect("schema");
         let base = "title: T\nshelves:\n  - id: s1\n";
-        let cases: [(String, Vec<(&str, &str)>); 15] = [
+        let cases: [(String, Vec<(&str, &str)>); 20] = [
+            (
+                format!("{base}notes: north\n"),
+                vec![(DATASET, kind::VALUE_NOT_A_LIST)],
+            ),
+            (
+                format!("{base}featured: [s1]\n"),
+                vec![(DATASET, kind::VALUE_SHAPE_OUTSIDE_RANGE)],
+            ),
+            (
+                format!("{base}pick: [s1]\n"),
+                vec![(DATASET, kind::VALUE_SHAPE_OUTSIDE_RANGE)],
+            ),
+            (
+                "title: T\nshelves: [[{id: s1}]]\n".to_string(),
+                vec![("shelves", kind::UNUSABLE_COLLECTION_ENTRY)],
+            ),
             (base.to_string(), vec![]),
             (format!("{base}pick: s1\n"), vec![]),
             (format!("{base}either: 42\n"), vec![]),
@@ -3936,7 +3967,11 @@ classes:
             ),
             (
                 format!("{base}notes: {{a: 1}}\n"),
-                vec![(DATASET, kind::VALUE_SHAPE_OUTSIDE_RANGE)],
+                vec![(DATASET, kind::VALUE_NOT_A_LIST)],
+            ),
+            (
+                format!("{base}mixed_many: {{id: s2}}\n"),
+                vec![(DATASET, kind::VALUE_NOT_A_LIST)],
             ),
             (
                 format!("{base}count: abc\n"),
@@ -3998,7 +4033,7 @@ classes:
     }
 
     #[test]
-    fn a_null_in_a_list_at_a_vessel_roots_single_valued_class_slot_is_reported() {
+    fn a_list_at_a_vessel_roots_single_valued_class_slot_is_one_shape_finding() {
         let schema: SchemaDefinition = serde_norway::from_str(&VESSEL_UNION_SCHEMA.replace(
             "      things:\n",
             "      featured:\n        range: Crate\n        inlined: true\n      pick:\n        \
@@ -4012,19 +4047,13 @@ classes:
                     .expect("data");
             let violations =
                 validate_instances(&schema, &InstanceSet::from_linkml_data(&schema, &data));
-            let reported = violations
-                .iter()
-                .filter(|v| {
-                    matches!(
-                        &v.kind,
-                        ViolationKind::UnusableCollectionEntry(u) if u.slot == slot
-                    )
-                })
-                .count();
             assert_eq!(
-                reported,
-                1,
-                "the null at `{slot}` is reported once; got: {:?}",
+                violations
+                    .iter()
+                    .map(|v| (v.record.as_str(), Finding::kind(v)))
+                    .collect::<Vec<_>>(),
+                vec![(DATASET, kind::VALUE_SHAPE_OUTSIDE_RANGE)],
+                "the list at `{slot}` is reported once, whatever it holds; got: {:?}",
                 violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
             );
             let absent: serde_norway::Value =
@@ -4196,14 +4225,6 @@ classes:
                 "conformance/required-slot-absent",
             ),
             (
-                ViolationKind::SingleValuedSlotRepeated {
-                    class: class(),
-                    slot: slot(),
-                    count: 2,
-                },
-                "conformance/single-valued-slot-repeated",
-            ),
-            (
                 ViolationKind::FewerValuesThanMinimum {
                     class: class(),
                     slot: slot(),
@@ -4260,6 +4281,13 @@ classes:
                     ranges: ranges(),
                 },
                 "conformance/value-shape-outside-range",
+            ),
+            (
+                ViolationKind::ValueNotAList {
+                    class: class(),
+                    slot: slot(),
+                },
+                "conformance/value-not-a-list",
             ),
             (
                 ViolationKind::ReferenceOutsideUnion {
@@ -5105,6 +5133,59 @@ classes:
         );
     }
 
+    #[test]
+    fn a_value_of_the_wrong_list_shape_loads_nothing_and_is_reported() {
+        // The cases of `conformance/probe_value_arity.py`, whose
+        // single-valued reference `route` is `sender` here and whose
+        // multivalued `stops` is `route`: the validator refuses each by its
+        // shape, whatever a list's length.
+        let shape = (kind::VALUE_SHAPE_OUTSIDE_RANGE, "a list");
+        let not_a_list = (kind::VALUE_NOT_A_LIST, crate::instances::NOT_A_LIST_SHAPE);
+        for (fields, slot, (want, marker)) in [
+            ("label: [L]", "label", shape),
+            ("label: [L, M]", "label", shape),
+            ("label: L, weight: [1]", "weight", shape),
+            ("label: L, tags: north", "tags", not_a_list),
+            ("label: L, tags: {a: 1}", "tags", not_a_list),
+            ("label: L, tags: [[a, b]]", "tags", shape),
+            ("label: L, sender: [p2]", "sender", shape),
+            ("label: L, route: p2", "route", not_a_list),
+            ("label: L, route: [[p2]]", "route", shape),
+        ] {
+            let record = format!("{{id: p1, {fields}}}");
+            for (how, violations) in [
+                ("in a dataset", in_a_dataset(&record)),
+                ("alone", parcel_violations(&record)),
+            ] {
+                assert_eq!(
+                    records_and_kinds(&violations),
+                    vec![("p1", want)],
+                    "{fields} {how}; got: {violations:?}"
+                );
+            }
+            let set = InstanceSet::from_linkml_data(
+                &parcel_schema(),
+                &data(&format!("parcels:\n  - {record}\n")),
+            );
+            let p1 = set.instances.iter().find(|i| i.id == "p1").expect("p1");
+            assert_eq!(
+                p1.values_at(slot).collect::<Vec<_>>(),
+                vec![&InstanceValue::Unexpected(marker)],
+                "{fields} loads no value at `{slot}`, only its shape"
+            );
+        }
+        assert_eq!(
+            records_and_kinds(&in_a_dataset("{id: p1, label: L, bogus: [a, [b]]}")),
+            vec![("p1", kind::UNDECLARED_FIELD)],
+            "an undeclared field's list is not checked against a slot it has none of"
+        );
+        assert_eq!(
+            records_and_kinds(&in_a_dataset("{id: p1, label: L, tags: !custom [a, b]}")),
+            vec![("p1", kind::VALUE_SHAPE_OUTSIDE_RANGE)],
+            "a tagged list is refused as a tagged value, not as one value where a list belongs"
+        );
+    }
+
     fn shapes_outside_range(violations: &[Violation]) -> Vec<(&str, &str, &str)> {
         violations
             .iter()
@@ -5146,7 +5227,6 @@ classes:
         for (notes, shape) in [
             ("[north, null]", "a null"),
             ("[north, {a: 1}]", "an object"),
-            ("{a: 1}", "an object"),
         ] {
             let v = validate_instance_data(
                 &parcel_schema(),
@@ -5169,12 +5249,12 @@ classes:
             "on a record"
         );
         assert_eq!(
-            shapes_outside_range(&validate_instance_data(
+            records_and_kinds(&validate_instance_data(
                 &parcel_schema(),
                 &data(&format!("id: d1\nnotes: {object}\n")),
             )),
-            vec![("d1", "notes", "an object")],
-            "on the container"
+            vec![("d1", kind::VALUE_NOT_A_LIST)],
+            "on the container, where the slot holds a list, it is no list"
         );
     }
 }

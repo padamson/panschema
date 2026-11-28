@@ -1,0 +1,27 @@
+== conforming
+   validate: No issues found
+   convert: {"label": "L", "route": "p2", "stops": ["p2"], "tags": ["a"], "weight": 1}
+== a one-entry list at a single-valued string
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['L'] is not of type 'string', 'null' in /parcels/1/label
+   convert: {"label": "['L']"}
+== a two-entry list at a single-valued string
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['L', 'M'] is not of type 'string', 'null' in /parcels/1/label
+   convert: {"label": "['L', 'M']"}
+== a one-entry list at a single-valued integer
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] [1] is not of type 'integer', 'null' in /parcels/1/weight
+   convert: exit 1: TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'
+== a bare string at a multivalued string
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'north' is not of type 'array', 'null' in /parcels/1/tags
+   convert: {"tags": ["north"]}
+== a list nested in a multivalued string
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['a', 'b'] is not of type 'string' in /parcels/1/tags/0
+   convert: {"tags": ["['a', 'b']"]}
+== a one-entry list at a single-valued reference
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['p2'] is not of type 'string', 'null' in /parcels/1/route
+   convert: {"route": "['p2']"}
+== a bare id at a multivalued reference
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'p2' is not of type 'array', 'null' in /parcels/1/stops
+   convert: {"stops": ["p2"]}
+== a list nested in a multivalued reference
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['p2'] is not of type 'string' in /parcels/1/stops/0
+   convert: {"stops": ["['p2']"]}

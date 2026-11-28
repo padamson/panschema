@@ -7,13 +7,15 @@ records and describes the dataset but is no record itself. Each case
 breaks one of its own fields (a `null` in its list of scalars, an object
 or a wrong-kind value at a scalar slot, a field the class does not
 declare, a bare number at its union of classes, a required slot left
-out, a number or an empty list where its required collection belongs) or
-sets an id or a record at the union, or a number at a union that also
-allows integers, and prints `linkml-validate`'s verdict, with
-`linkml-convert`'s for the empty list. A last case gives `Depot` an
-identifier and leaves it out. panschema checks such a container's fields
-as it checks any record's, without emitting it (see
-`InstanceSet::from_linkml_data` in `panschema-model/src/instances.rs`).
+out, a number or an empty list where its required collection belongs, a
+bare string where a list belongs, a list where one value belongs, a list
+inside its collection) or sets an id or a record at the union, or a
+number at a union that also allows integers, and prints
+`linkml-validate`'s verdict, with `linkml-convert`'s for the empty list.
+A last case gives `Depot` an identifier and leaves it out. panschema
+checks such a container's fields as it checks any record's, without
+emitting it (see `InstanceSet::from_linkml_data` in
+`panschema-model/src/instances.rs`).
 """
 
 import shutil
@@ -42,6 +44,7 @@ classes:
       either: {any_of: [{range: Shelf}, {range: Crate}, {range: integer}]}
       one: {any_of: [{range: Shelf}, {range: integer}]}
       many: {multivalued: true, any_of: [{range: Shelf}, {range: integer}]}
+      featured: {range: Shelf}
   Shelf:
     attributes:
       id: {identifier: true}
@@ -64,6 +67,10 @@ CASES = {
     "a wrong-kind value at the container's integer slot": BASE + "count: abc\n",
     "a field the container does not declare": BASE + "extra: 1\n",
     "a bare number at the container's union of classes": BASE + "pick: 42\n",
+    "a bare string at the container's list of scalars": BASE + "notes: north\n",
+    "a list at the container's single-valued reference": BASE + "featured: [s1]\n",
+    "a list at the container's union of classes": BASE + "pick: [s1]\n",
+    "a list inside the container's required collection": "title: T\nshelves: [[{id: s1}]]\n",
     "an id at the container's union of classes": BASE + "pick: s1\n",
     "a number at the container's union of classes and integer": BASE + "either: 42\n",
     "a number at the container's union of one class and integer": BASE + "one: 42\n",

@@ -10,6 +10,14 @@
    validate: exit 1: [ERROR] [<tmp>/data.yaml/0] Additional properties are not allowed ('extra' was unexpected) in /
 == a bare number at the container's union of classes
    validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 42 is not valid under any of the given schemas in /pick
+== a bare string at the container's list of scalars
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] 'north' is not of type 'array', 'null' in /notes
+== a list at the container's single-valued reference
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['s1'] is not of type 'string', 'null' in /featured
+== a list at the container's union of classes
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] ['s1'] is not valid under any of the given schemas in /pick
+== a list inside the container's required collection
+   validate: exit 1: [ERROR] [<tmp>/data.yaml/0] [{'id': 's1'}] is not of type 'object' in /shelves/0
 == an id at the container's union of classes
    validate: No issues found
 == a number at the container's union of classes and integer

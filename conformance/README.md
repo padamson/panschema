@@ -177,6 +177,27 @@ set to `null` as one that names no class, and reading a dict entry's
 `null` body as a record with only its key.
 
 ```bash
+uv run --project conformance conformance/probe_value_arity.py
+```
+
+The value-arity probe checks what LinkML does when a slot gets the
+wrong number of values. A single-valued slot should hold one value and a
+multivalued slot should hold a list, and the probe breaks that three
+ways: a list where one value belongs (`label: [L]`), one value where a
+list belongs (`tags: north`), and a list inside a list
+(`tags: [[a, b]]`). It tries each on a slot holding text and on a slot
+holding a reference to another record, and prints what
+`linkml-validate` says and what `linkml-convert` loads.
+
+The validator rejects all three, and a one-entry list is rejected the
+same as a longer one (`['L'] is not of type 'string'`, `'north' is not
+of type 'array'`). `linkml-convert` is more forgiving: it turns
+`tags: north` into a one-entry list, and turns `label: [L]` into the
+text `"['L']"`. `verify` follows the validator. It reports each case and
+loads none of these values, which also matches the Rust panschema
+generates, since those types cannot hold them.
+
+```bash
 uv run --project conformance conformance/probe_vessel_fields.py
 ```
 
@@ -184,8 +205,9 @@ The vessel-fields probe breaks one field at a time of a `tree_root`
 container that declares no identifier (a `null` in its list of scalars,
 an object or a wrong-kind value at a scalar slot, a field its class does
 not declare, a bare number or a record at its union of classes, a
-required slot left out, a number where its required collection belongs)
-and prints `linkml-validate`'s verdict. Each is refused, as on any
+required slot left out, a number where its required collection belongs,
+a bare string where a list belongs, a list where one value belongs, and a
+list inside its collection) and prints `linkml-validate`'s verdict. Each is refused, as on any
 record, the number in place of the collection with one error (`7 is not
 of type 'array'`). An id at the union is accepted, and so is a number at
 a range that also allows integers, whether it joins them with one class
