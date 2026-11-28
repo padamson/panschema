@@ -167,7 +167,7 @@ jobs:
         targets: wasm32-unknown-unknown
 
     - name: Install wasm-pack
-      uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+      uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
       with:
         tool: wasm-pack
         fallback: none
@@ -201,7 +201,7 @@ jobs:
       run: wasm-pack build panschema-viz --target web
 
     - name: Install cargo-nextest
-      uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+      uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
       with:
         tool: cargo-nextest
         fallback: none
@@ -210,7 +210,7 @@ jobs:
     # mdbook's own markup is what the toolbar asset is checked against.
     # Prebuilt and pinned; a new mdbook is a deliberate bump here.
     - name: Install mdbook
-      uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+      uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
       with:
         tool: mdbook@0.5.4
         fallback: none
@@ -391,7 +391,7 @@ jobs:
           touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: cargo-nextest
           fallback: none
